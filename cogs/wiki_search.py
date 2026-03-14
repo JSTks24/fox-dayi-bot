@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from collections import OrderedDict
 from urllib.parse import urlencode, urlparse
 
@@ -14,6 +15,7 @@ DEFAULT_BASE_URL = "https://naoleiwiki.pages.dev"
 DEFAULT_LIMIT = 5
 MAX_LIMIT = 50
 REQUEST_TIMEOUT_SECONDS = 15
+USER_COOLDOWN_SECONDS = 15
 
 SECTION_LABELS = {
     "faq": "常见问题",
@@ -177,6 +179,15 @@ def format_search_results(results: list[dict]) -> str:
 class WikiSearch(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.user_cooldowns: dict[int, float] = {}
+
+    def get_remaining_cooldown(self, user_id: int) -> int:
+        last_used_at = self.user_cooldowns.get(user_id)
+        if last_used_at is None:
+            return 0
+        elapsed = time.monotonic() - last_used_at
+        remaining = USER_COOLDOWN_SECONDS - elapsed
+        return max(0, int(remaining) if remaining.is_integer() else int(remaining) + 1)
 
     @app_commands.command(name="问题搜索", description="在脑类知识库中搜索相关内容")
     @app_commands.describe(
@@ -191,11 +202,22 @@ class WikiSearch(commands.Cog):
     ):
         await safe_defer(interaction)
 
+        user_id = interaction.user.id
+        remaining_cooldown = self.get_remaining_cooldown(user_id)
+        if remaining_cooldown > 0:
+            await interaction.edit_original_response(
+                content=f"⏳ 你使用得太频繁了，请在 {remaining_cooldown} 秒后再试。"
+            )
+            log_slash_command(interaction, False)
+            return
+
         query = (关键词 or "").strip()
         if not query:
             await interaction.edit_original_response(content="❌ 关键词不能为空。")
             log_slash_command(interaction, False)
             return
+
+        self.user_cooldowns[user_id] = time.monotonic()
 
         base_url = normalize_base_url(os.getenv("NAOLEI_WIKI_BASE_URL", DEFAULT_BASE_URL))
         limit = resolve_limit(os.getenv("NAOLEI_WIKI_SEARCH_LIMIT", str(DEFAULT_LIMIT)))
