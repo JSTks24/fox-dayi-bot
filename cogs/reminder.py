@@ -100,6 +100,14 @@ class Reminder(commands.Cog):
         self.bot = bot
         self._tasks: set[asyncio.Task] = set()
 
+    @staticmethod
+    def _is_trusted(interaction: discord.Interaction) -> bool:
+        """检查用户是否为管理员或受信任用户"""
+        bot = interaction.client
+        admins = getattr(bot, "admins", [])
+        trusted_users = getattr(bot, "trusted_users", [])
+        return interaction.user.id in admins or interaction.user.id in trusted_users
+
     def _track_task(self, task: asyncio.Task) -> None:
         self._tasks.add(task)
         task.add_done_callback(lambda t: self._tasks.discard(t))
@@ -127,6 +135,7 @@ class Reminder(commands.Cog):
             print(f"[提醒] 发送私信失败: {exc}")
 
     @app_commands.command(name="提醒", description="设置到点私信提醒")
+    @app_commands.check(_is_trusted)
     @app_commands.describe(
         时间="支持 YYYY-MM-DD HH:MM(+08:00) / 30m/2h/1d / 1d2h30m / HH:MM(+08:00)",
         提示事项="可选：提醒你要做的事项",
@@ -164,6 +173,16 @@ class Reminder(commands.Cog):
             ephemeral=True,
         )
         log_slash_command(interaction, True)
+
+    @remind.error
+    async def remind_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        if isinstance(error, app_commands.CheckFailure):
+            await interaction.response.send_message(
+                "抱歉，该命令仅限答疑组成员使用。",
+                ephemeral=True,
+            )
+        else:
+            raise error
 
 
 async def setup(bot: commands.Bot):
