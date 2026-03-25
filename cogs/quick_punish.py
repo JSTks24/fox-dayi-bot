@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 import os
 import sqlite3
 from datetime import datetime
@@ -173,7 +174,15 @@ class QuickPunishConfirmView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=None)
         else:
             self._disable_all()
-            await interaction.edit_original_response(content=f"❌ 处罚执行失败\n{message}", view=None)
+            is_duplicate_prevented = self.cog._is_duplicate_punishment_message(message)
+            embed = discord.Embed(
+                title="⚠️ 本次未重复执行处罚" if is_duplicate_prevented else "❌ 处罚执行失败",
+                description=message,
+                color=discord.Color.orange() if is_duplicate_prevented else discord.Color.red(),
+                timestamp=datetime.now()
+            )
+            embed.set_footer(text=f"操作人: {interaction.user.name}")
+            await interaction.edit_original_response(embed=embed, view=None)
 
     @discord.ui.button(label="取消", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -301,6 +310,7 @@ class QuickPunishCog(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
+        self._punish_locks: Dict[int, asyncio.Lock] = {}
 
         # 从环境变量加载配置
         self.enabled = os.getenv("QUICK_PUNISH_ENABLED", "false").lower() == "true"
@@ -425,6 +435,35 @@ class QuickPunishCog(commands.Cog):
         if not isinstance(cfg, dict):
             cfg = {}
         return {"allowed_roles": cfg.get("allowed_roles", []), "punish_remove_roles": cfg.get("punish_remove_roles", [])}
+
+    def _get_punish_lock(self, user_id: int) -> asyncio.Lock:
+        lock = self._punish_locks.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._punish_locks[user_id] = lock
+        return lock
+
+    def _release_punish_lock(self, user_id: int, lock: asyncio.Lock):
+        if lock.locked():
+            lock.release()
+        if self._punish_locks.get(user_id) is lock and not lock.locked():
+            self._punish_locks.pop(user_id, None)
+
+    def _is_already_processed_result(self, result: Optional[Dict[str, Any]]) -> bool:
+        already_processed_codes = {"no_removable_roles", "removal_conflict"}
+        return bool(result) and result.get("code") in already_processed_codes
+
+    def _all_sync_results_already_processed(self, results: List[Dict[str, Any]]) -> bool:
+        return bool(results) and all(self._is_already_processed_result(item) for item in results)
+
+    def _is_duplicate_punishment_message(self, message: str) -> bool:
+        duplicate_markers = (
+            "正在被其他管理员处理",
+            "先一步处罚",
+            "不会重复执行",
+            "已不再拥有可移除的处罚身份组"
+        )
+        return any(marker in message for marker in duplicate_markers)
     
     def _load_dm_templates(self):
         """扫描xiaozuowen目录，加载所有txt模板文件名 -> 路径"""
@@ -846,39 +885,45 @@ class QuickPunishCog(commands.Cog):
             )
             await channel.send(embed=error_embed)
     
-    async def _resolve_member_in_guild(self, guild: discord.Guild, user_id: int) -> Optional[discord.Member]:
-        member = guild.get_member(user_id)
-        if member:
-            return member
+    async def _resolve_member_in_guild(self, guild: discord.Guild, user_id: int,
+                                       force_fetch: bool = False) -> Optional[discord.Member]:
+        cached_member = guild.get_member(user_id)
+        if cached_member and not force_fetch:
+            return cached_member
         try:
             return await guild.fetch_member(user_id)
         except Exception:
-            return None
+            return cached_member
 
     async def _execute_role_removal_in_guild(self, guild_id: str,
                                              target_user_id: int,
-                                             trigger_guild_id: Optional[int] = None) -> Dict[str, Any]:
+                                             trigger_guild_id: Optional[int] = None,
+                                             force_fetch: bool = False) -> Dict[str, Any]:
         result = {
             "guild_id": guild_id,
             "guild_name": guild_id,
             "success": False,
             "removed_roles": [],
-            "error": None
+            "error": None,
+            "code": None
         }
 
         if not str(guild_id).isdigit():
-            result["error"] = "无效guild id"
+            result["error"] = "服务器配置中的 guild id 无效"
+            result["code"] = "invalid_guild_id"
             return result
 
         guild = self.bot.get_guild(int(guild_id))
         if not guild:
-            result["error"] = "机器人不在该服务器或缓存未命中"
+            result["error"] = "机器人不在该服务器，或暂时无法获取服务器对象"
+            result["code"] = "guild_unavailable"
             return result
 
         result["guild_name"] = guild.name
-        member = await self._resolve_member_in_guild(guild, target_user_id)
+        member = await self._resolve_member_in_guild(guild, target_user_id, force_fetch=force_fetch)
         if not member:
-            result["error"] = "用户不在该服务器"
+            result["error"] = "用户当前不在该服务器，无法同步移除身份组"
+            result["code"] = "member_not_found"
             return result
 
         guild_cfg = self._get_guild_sync_config(guild.id)
@@ -887,25 +932,30 @@ class QuickPunishCog(commands.Cog):
             configured_remove_roles = self.remove_roles
 
         if not configured_remove_roles:
-            result["error"] = "该服务器未配置可移除身份组"
+            result["error"] = "该服务器未配置可移除的处罚身份组"
+            result["code"] = "no_configured_roles"
             return result
 
         user_role_ids = [role.id for role in member.roles]
         roles_to_remove = [role_id for role_id in configured_remove_roles if role_id in user_role_ids]
         if not roles_to_remove:
-            result["error"] = "用户未拥有配置中的可移除身份组"
+            result["error"] = "用户当前已不再拥有可移除的处罚身份组，可能已被其他管理员先一步处理"
+            result["code"] = "no_removable_roles"
             return result
 
         try:
             removed_roles, removal_success = await self.remove_user_roles(member, roles_to_remove)
             if not removal_success:
-                result["error"] = "用户未拥有需要移除的身份组（可能已被其他管理员处罚）"
+                result["error"] = "执行时发现用户已不再拥有需要移除的身份组，可能已被其他管理员先一步处罚"
+                result["code"] = "removal_conflict"
                 return result
             result["success"] = True
             result["removed_roles"] = removed_roles
+            result["code"] = "success"
             return result
         except Exception as e:
-            result["error"] = str(e)
+            result["error"] = f"移除身份组时发生错误：{str(e)}"
+            result["code"] = "removal_error"
             return result
 
     def _format_sync_results(self, results: List[Dict[str, Any]]) -> str:
@@ -928,20 +978,44 @@ class QuickPunishCog(commands.Cog):
         if trigger_guild is None:
             return False, "无法识别触发服务器", []
 
-        sync_guild_ids = self._get_sync_guild_ids(trigger_guild.id)
-        sync_results: List[Dict[str, Any]] = []
+        punish_lock = self._get_punish_lock(target_user.id)
+        if punish_lock.locked():
+            return False, (
+                f"用户 {target_user.mention} 正在被其他管理员处理。\n"
+                "为避免重复处罚，本次操作已被拦截；若对方已完成处罚，请稍后再查看记录。"
+            ), []
 
+        await punish_lock.acquire()
         try:
+            sync_guild_ids = self._get_sync_guild_ids(trigger_guild.id)
+            sync_results: List[Dict[str, Any]] = []
+
             for guild_id in sync_guild_ids:
                 sync_results.append(
                     await self._execute_role_removal_in_guild(
-                        guild_id, target_user.id, trigger_guild_id=trigger_guild.id
+                        guild_id,
+                        target_user.id,
+                        trigger_guild_id=trigger_guild.id,
+                        force_fetch=True
                     )
                 )
 
             success_results = [r for r in sync_results if r.get("success")]
+            trigger_result = next(
+                (r for r in sync_results if str(r.get("guild_id")) == str(trigger_guild.id)),
+                None
+            )
             if not success_results:
-                return False, f"处罚失败：双服均未成功执行\n{self._format_sync_results(sync_results)}", []
+                if self._is_already_processed_result(trigger_result) or self._all_sync_results_already_processed(sync_results):
+                    return False, (
+                        f"用户 {target_user.mention} 当前已不再拥有可移除的处罚身份组，"
+                        "很可能已被其他管理员先一步处罚，本次不会重复执行。\n"
+                        f"{self._format_sync_results(sync_results)}"
+                    ), []
+                return False, (
+                    "本次处罚未执行：未能在任何目标服务器完成身份组移除。\n"
+                    f"{self._format_sync_results(sync_results)}"
+                ), []
 
             removed_roles_by_guild = {
                 str(r["guild_id"]): r.get("removed_roles", [])
@@ -1038,6 +1112,8 @@ class QuickPunishCog(commands.Cog):
             except Exception:
                 pass
             return False, f"执行处罚时出错：{str(e)}", []
+        finally:
+            self._release_punish_lock(target_user.id, punish_lock)
     
     async def _build_dm_content(self, target_message: discord.Message,
                                reason: str, executor: discord.User,
