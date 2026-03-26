@@ -80,12 +80,14 @@ class PublicStreamReply:
         self.requester_name = (requester_name or "未知用户")[:80]
         self.message_limit = message_limit
         self.edit_interval = edit_interval
+        self.started_at = time.monotonic()
 
         self.messages: list[discord.Message] = []
         self.full_text = ""
         self.last_edit_at = 0.0
 
         self._dirty = False
+        self._show_footer = False
         self._closed = False
         self._flush_task: Optional[asyncio.Task] = None
         self._render_lock = asyncio.Lock()
@@ -146,7 +148,7 @@ class PublicStreamReply:
             if not force and not self._dirty:
                 return
 
-            desired_contents = self._split_response_text(response_text)
+            desired_contents = self._split_response_text(response_text, include_footer=self._show_footer)
             any_updated = False
 
             for index, desired_content in enumerate(desired_contents):
@@ -178,6 +180,7 @@ class PublicStreamReply:
                 self.last_edit_at = time.monotonic()
 
     async def finalize(self) -> None:
+        self._show_footer = True
         await self.flush(force=True)
         await self.close()
 
@@ -231,9 +234,9 @@ class PublicStreamReply:
         except asyncio.CancelledError:
             pass
 
-    def _split_response_text(self, text: str) -> list[str]:
+    def _split_response_text(self, text: str, *, include_footer: bool = False) -> list[str]:
         chunks: list[str] = []
-        remaining = text
+        remaining = text + self._build_footer_line() if include_footer else text
         chunk_index = 0
 
         while remaining:
@@ -263,11 +266,15 @@ class PublicStreamReply:
 
     def _build_chunk_header(self, chunk_index: int) -> str:
         if chunk_index == 0:
-            return (
-                "🦊 AI 回复\n"
-                f"由 {self.display_model_name} 提供支持 | {self.requester_name} 问的。\n\n"
-            )
+            return "🦊 AI 回复\n\n"
         return f"🦊 AI 回复（续 {chunk_index + 1}）\n\n"
+
+    def _build_footer_line(self) -> str:
+        elapsed_seconds = max(1, int(round(time.monotonic() - self.started_at)))
+        return (
+            "\n"
+            f"-# time: {elapsed_seconds} s | 由{self.display_model_name}提供支持 | {self.requester_name} 问的。"
+        )
 
 
 class AppDayi(commands.Cog):
