@@ -6,8 +6,10 @@ import json
 import mimetypes
 import os
 import random
+import re
 import time
 import traceback
+import uuid
 from datetime import datetime
 from typing import Any, Optional
 
@@ -25,10 +27,20 @@ STREAM_EDIT_INTERVAL_SECONDS = 3.0
 STREAM_POLL_INTERVAL_SECONDS = 0.5
 STREAM_TIMEOUT_SECONDS = 180.0
 MAX_IMAGE_ATTACHMENTS = 3
+MAX_REPLY_CHAIN_ROUNDS = 5
+MAX_HISTORY_IMAGE_TURNS = 2
+REPLY_CHAIN_SCAN_LIMIT = 120
+PUBLIC_RENDER_OVERHEAD_BUFFER = 260
+QD_META_VERSION = 1
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT = "以下消息来自 Discord 同一条回复链历史，请结合上下文并重点回答最后一条用户消息。"
 STATUS_RECEIVED = "⏳ 收到请求，正在处理中，请稍候..."
+STATUS_RESOLVING_CONTEXT = "🧵 正在整理回复链上下文，请稍候..."
 STATUS_PROCESSING_IMAGES = "🖼️ 正在处理图片，请稍候..."
 STATUS_REQUESTING_AI = "🤖 正在向 AI 请求回复，请稍候..."
+QD_META_LINE_REGEX = re.compile(r"^\s*-# <\|qd-meta\|>(?P<payload>.+?)<\|/qd-meta\|>\s*$", re.MULTILINE)
+QD_AUXILIARY_LINE_REGEX = re.compile(r"^\s*-# <\|qd-(?:footer|meta)\|>.*?<\|/qd-(?:footer|meta)\|>\s*$", re.MULTILINE)
+QD_HEADER_REGEX = re.compile(r"^🦊 AI 回复(?:（续 \d+）)?\n\n")
 
 
 class QuotaError(app_commands.AppCommandError):
@@ -63,6 +75,48 @@ async def safe_defer(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
 
+def build_qd_auxiliary_line(marker_name: str, content: str) -> str:
+    return f"-# <|{marker_name}|>{content}<|/{marker_name}|>"
+
+
+def build_qd_meta_line(*, session_id: str, source_message_id: int, chunk_index: int, total_chunks: int, kind: str) -> str:
+    payload = json.dumps(
+        {
+            "v": QD_META_VERSION,
+            "sid": session_id,
+            "src": source_message_id,
+            "idx": chunk_index,
+            "tot": total_chunks,
+            "kind": kind,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return build_qd_auxiliary_line("qd-meta", payload)
+
+
+def extract_qd_meta(content: str) -> Optional[dict[str, Any]]:
+    match = QD_META_LINE_REGEX.search(content)
+    if not match:
+        return None
+
+    try:
+        payload = json.loads(match.group("payload"))
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def strip_public_reply_markup(content: str) -> str:
+    cleaned = QD_AUXILIARY_LINE_REGEX.sub("", content)
+    cleaned = QD_HEADER_REGEX.sub("", cleaned, count=1)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 class PublicStreamReply:
     """管理公开普通消息的流式输出、节流编辑与自动分片。"""
 
@@ -74,6 +128,7 @@ class PublicStreamReply:
         *,
         message_limit: int = PUBLIC_MESSAGE_LIMIT,
         edit_interval: float = STREAM_EDIT_INTERVAL_SECONDS,
+        reply_session_id: Optional[str] = None,
     ):
         self.source_message = source_message
         self.display_model_name = (display_model_name or "未知模型")[:80]
@@ -81,6 +136,8 @@ class PublicStreamReply:
         self.message_limit = message_limit
         self.edit_interval = edit_interval
         self.started_at = time.monotonic()
+        self.reply_session_id = reply_session_id or uuid.uuid4().hex[:12]
+        self.reply_kind = "partial"
 
         self.messages: list[discord.Message] = []
         self.full_text = ""
@@ -161,17 +218,11 @@ class PublicStreamReply:
                         )
                         any_updated = True
                 else:
-                    if index == 0:
-                        new_message = await self.source_message.reply(
-                            desired_content,
-                            mention_author=False,
-                            allowed_mentions=PUBLIC_ALLOWED_MENTIONS,
-                        )
-                    else:
-                        new_message = await self.source_message.channel.send(
-                            desired_content,
-                            allowed_mentions=PUBLIC_ALLOWED_MENTIONS,
-                        )
+                    new_message = await self.source_message.reply(
+                        desired_content,
+                        mention_author=False,
+                        allowed_mentions=PUBLIC_ALLOWED_MENTIONS,
+                    )
                     self.messages.append(new_message)
                     any_updated = True
 
@@ -180,6 +231,7 @@ class PublicStreamReply:
                 self.last_edit_at = time.monotonic()
 
     async def finalize(self) -> None:
+        self.reply_kind = "answer"
         self._show_footer = True
         await self.flush(force=True)
         await self.close()
@@ -235,16 +287,16 @@ class PublicStreamReply:
             pass
 
     def _split_response_text(self, text: str, *, include_footer: bool = False) -> list[str]:
-        chunks: list[str] = []
-        remaining = text + self._build_footer_line() if include_footer else text
+        raw_chunks: list[str] = []
+        remaining = text
         chunk_index = 0
 
         while remaining:
             header = self._build_chunk_header(chunk_index)
-            available_length = max(200, self.message_limit - len(header))
+            available_length = max(200, self.message_limit - len(header) - PUBLIC_RENDER_OVERHEAD_BUFFER)
 
             if len(remaining) <= available_length:
-                chunks.append(header + remaining)
+                raw_chunks.append(remaining.rstrip())
                 break
 
             split_at = remaining.rfind("\n", 0, available_length + 1)
@@ -258,11 +310,29 @@ class PublicStreamReply:
                 chunk_text = remaining[:available_length]
                 split_at = len(chunk_text)
 
-            chunks.append(header + chunk_text)
+            raw_chunks.append(chunk_text)
             remaining = remaining[split_at:].lstrip("\n ")
             chunk_index += 1
 
-        return chunks
+        total_chunks = len(raw_chunks)
+        rendered_chunks: list[str] = []
+        for index, chunk_text in enumerate(raw_chunks):
+            rendered_chunks.append(
+                self._render_chunk_content(
+                    chunk_text,
+                    chunk_index=index,
+                    total_chunks=total_chunks,
+                    include_footer=include_footer and index == total_chunks - 1,
+                )
+            )
+        return rendered_chunks
+
+    def _render_chunk_content(self, text: str, *, chunk_index: int, total_chunks: int, include_footer: bool) -> str:
+        content = f"{self._build_chunk_header(chunk_index)}{text}"
+        if include_footer:
+            content += f"\n\n{self._build_footer_line()}"
+        content += f"\n{self._build_meta_line(chunk_index=chunk_index + 1, total_chunks=total_chunks)}"
+        return content
 
     def _build_chunk_header(self, chunk_index: int) -> str:
         if chunk_index == 0:
@@ -271,9 +341,16 @@ class PublicStreamReply:
 
     def _build_footer_line(self) -> str:
         elapsed_seconds = max(1, int(round(time.monotonic() - self.started_at)))
-        return (
-            "\n"
-            f"-# time: {elapsed_seconds} s | 由{self.display_model_name}提供支持 | {self.requester_name} 问的。"
+        footer_text = f"time: {elapsed_seconds} s | 由{self.display_model_name}提供支持 | {self.requester_name} 问的。"
+        return build_qd_auxiliary_line("qd-footer", footer_text)
+
+    def _build_meta_line(self, *, chunk_index: int, total_chunks: int) -> str:
+        return build_qd_meta_line(
+            session_id=self.reply_session_id,
+            source_message_id=self.source_message.id,
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+            kind=self.reply_kind,
         )
 
 
@@ -498,6 +575,46 @@ class AppDayi(commands.Cog):
                 return random.choice(model_names)
         return os.getenv("OPENAI_MODEL") or "未知模型"
 
+    def _safe_int(self, value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _get_message_image_attachments(self, message: discord.Message) -> list[discord.Attachment]:
+        return [attachment for attachment in message.attachments if self._is_image_attachment(attachment)]
+
+    def _get_base_user_message_text(self, message: discord.Message, *, is_current: bool) -> str:
+        content = (message.content or "").strip()
+        if content:
+            return content
+
+        image_count = len(self._get_message_image_attachments(message))
+        if image_count > 0:
+            if is_current:
+                return "请结合这条消息附带的图片内容进行分析并回答。"
+            return "[该消息仅包含图片]"
+
+        if is_current:
+            return "这是什么问题，怎么解决"
+        return "[该消息没有文本内容]"
+
+    def _build_user_turn_prompt_text(self, turn: dict[str, Any]) -> str:
+        message = turn["message"]
+        text = self._get_base_user_message_text(message, is_current=bool(turn.get("is_current")))
+        included_image_count = len(turn.get("image_paths", []))
+        omitted_image_count = self._safe_int(turn.get("omitted_image_count"), 0)
+        notes: list[str] = []
+
+        if included_image_count > 0 and not (message.content or "").strip():
+            notes.append(f"[已附带 {included_image_count} 张图片]")
+        if omitted_image_count > 0:
+            notes.append(f"[该消息另含 {omitted_image_count} 张图片，但因上下文限制未附带原图]")
+
+        if notes:
+            text = f"{text}\n\n" + "\n".join(notes)
+        return text
+
     def _normalize_text_content(self, content: Any) -> str:
         if content is None:
             return ""
@@ -520,30 +637,284 @@ class AppDayi(commands.Cog):
             return "".join(parts)
         return str(content)
 
-    def _build_openai_messages(self, text: str, image_paths: list[str], system_prompt: str) -> list[dict[str, Any]]:
-        user_content: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    def _parse_quick_dayi_meta(self, message: discord.Message) -> Optional[dict[str, Any]]:
+        bot_user = self.bot.user
+        if not bot_user or message.author.id != bot_user.id:
+            return None
 
-        for image_path in image_paths:
-            size_kb = self._get_file_size_kb(image_path)
-            print(f"📎 添加图片到 API 请求: {os.path.basename(image_path)} ({size_kb:.2f}KB)")
-            base64_image = encode_image_to_base64(image_path)
-            user_content.append(
+        meta = extract_qd_meta(message.content)
+        if not meta:
+            return None
+        if self._safe_int(meta.get("v"), 0) != QD_META_VERSION:
+            return None
+        return meta
+
+    async def _fetch_message_by_id(self, channel: Any, message_id: int) -> Optional[discord.Message]:
+        try:
+            return await channel.fetch_message(message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+            print(f"⚠️ [快速答疑] 获取消息 {message_id} 失败: {type(e).__name__}: {e}")
+            return None
+
+    async def _resolve_referenced_message(self, message: discord.Message) -> Optional[discord.Message]:
+        reference = message.reference
+        if not reference or not reference.message_id:
+            return None
+
+        resolved = reference.resolved
+        if isinstance(resolved, discord.Message):
+            return resolved
+
+        return await self._fetch_message_by_id(message.channel, reference.message_id)
+
+    async def _reconstruct_quick_dayi_answer(
+        self,
+        bot_message: discord.Message,
+    ) -> Optional[tuple[discord.Message, str]]:
+        meta = self._parse_quick_dayi_meta(bot_message)
+        if not meta or str(meta.get("kind")) != "answer":
+            return None
+
+        session_id = str(meta.get("sid") or "")
+        if not session_id:
+            return None
+
+        source_message_id = self._safe_int(meta.get("src"), 0)
+        if source_message_id <= 0:
+            return None
+
+        source_message = await self._fetch_message_by_id(bot_message.channel, source_message_id)
+        if not source_message:
+            return None
+
+        total_chunks = max(1, self._safe_int(meta.get("tot"), 1))
+        initial_chunk_index = max(1, self._safe_int(meta.get("idx"), 1))
+        collected_chunks: dict[int, discord.Message] = {initial_chunk_index: bot_message}
+        scan_limit = max(REPLY_CHAIN_SCAN_LIMIT, total_chunks * 10)
+
+        async for candidate in bot_message.channel.history(limit=scan_limit, after=source_message, oldest_first=True):
+            if candidate.id == bot_message.id:
+                continue
+            if not self.bot.user or candidate.author.id != self.bot.user.id:
+                continue
+            if not candidate.reference or candidate.reference.message_id != source_message.id:
+                continue
+
+            candidate_meta = self._parse_quick_dayi_meta(candidate)
+            if not candidate_meta or str(candidate_meta.get("kind")) != "answer":
+                continue
+            if str(candidate_meta.get("sid") or "") != session_id:
+                continue
+
+            chunk_index = max(1, self._safe_int(candidate_meta.get("idx"), len(collected_chunks) + 1))
+            collected_chunks[chunk_index] = candidate
+            if len(collected_chunks) >= total_chunks:
+                break
+
+        if len(collected_chunks) < total_chunks:
+            print(
+                f"⚠️ [快速答疑] 回复链重组不完整: sid={session_id}, "
+                f"找到 {len(collected_chunks)}/{total_chunks} 段"
+            )
+
+        ordered_parts: list[str] = []
+        for chunk_index in sorted(collected_chunks):
+            chunk_text = strip_public_reply_markup(collected_chunks[chunk_index].content)
+            if chunk_text:
+                ordered_parts.append(chunk_text)
+
+        assistant_text = "\n".join(ordered_parts).strip()
+        if not assistant_text:
+            return None
+
+        return source_message, assistant_text
+
+    async def _collect_reply_chain_history(self, current_message: discord.Message) -> list[dict[str, Any]]:
+        history_pairs: list[dict[str, Any]] = []
+        cursor_message = current_message
+        visited_source_ids = {current_message.id}
+
+        for _ in range(MAX_REPLY_CHAIN_ROUNDS):
+            replied_message = await self._resolve_referenced_message(cursor_message)
+            if not replied_message:
+                break
+
+            reconstructed = await self._reconstruct_quick_dayi_answer(replied_message)
+            if not reconstructed:
+                break
+
+            source_message, assistant_text = reconstructed
+            if source_message.id in visited_source_ids:
+                print(f"⚠️ [快速答疑] 回复链出现循环，提前停止: {source_message.id}")
+                break
+
+            visited_source_ids.add(source_message.id)
+            history_pairs.append(
                 {
-                    "type": "image_url",
-                    "image_url": {"url": base64_image},
+                    "user_message": source_message,
+                    "assistant_text": assistant_text,
+                }
+            )
+            cursor_message = source_message
+
+        if history_pairs:
+            print(f"🧵 [快速答疑] 命中回复链上下文: {len(history_pairs)} 轮")
+        else:
+            print("🧵 [快速答疑] 未命中可用的回复链上下文")
+
+        return history_pairs
+
+    def _select_context_image_counts(
+        self,
+        current_message: discord.Message,
+        history_pairs_newest_first: list[dict[str, Any]],
+    ) -> dict[int, int]:
+        remaining_slots = MAX_IMAGE_ATTACHMENTS
+        selected_counts: dict[int, int] = {}
+        priority_messages = [current_message]
+        priority_messages.extend(pair["user_message"] for pair in history_pairs_newest_first[:MAX_HISTORY_IMAGE_TURNS])
+
+        for user_message in priority_messages:
+            if remaining_slots <= 0:
+                break
+
+            image_attachments = self._get_message_image_attachments(user_message)
+            if not image_attachments:
+                continue
+
+            selected_count = min(len(image_attachments), remaining_slots)
+            selected_counts[user_message.id] = selected_count
+            remaining_slots -= selected_count
+
+        return selected_counts
+
+    def _build_user_turn_spec(
+        self,
+        message: discord.Message,
+        *,
+        is_current: bool,
+        selected_image_count: int,
+    ) -> dict[str, Any]:
+        image_attachments = self._get_message_image_attachments(message)
+        selected_attachments = image_attachments[:selected_image_count]
+        return {
+            "role": "user",
+            "message": message,
+            "is_current": is_current,
+            "selected_image_attachments": selected_attachments,
+            "total_image_count": len(image_attachments),
+            "image_paths": [],
+            "omitted_image_count": max(0, len(image_attachments) - len(selected_attachments)),
+        }
+
+    def _build_conversation_turns(
+        self,
+        current_message: discord.Message,
+        history_pairs_newest_first: list[dict[str, Any]],
+        selected_image_counts: dict[int, int],
+    ) -> list[dict[str, Any]]:
+        conversation_turns: list[dict[str, Any]] = []
+
+        for history_pair in reversed(history_pairs_newest_first):
+            user_message = history_pair["user_message"]
+            conversation_turns.append(
+                self._build_user_turn_spec(
+                    user_message,
+                    is_current=False,
+                    selected_image_count=selected_image_counts.get(user_message.id, 0),
+                )
+            )
+            conversation_turns.append(
+                {
+                    "role": "assistant",
+                    "text": history_pair["assistant_text"],
                 }
             )
 
-        if image_paths:
-            total_size_kb = sum(self._get_file_size_kb(path) for path in image_paths)
+        conversation_turns.append(
+            self._build_user_turn_spec(
+                current_message,
+                is_current=True,
+                selected_image_count=selected_image_counts.get(current_message.id, 0),
+            )
+        )
+        return conversation_turns
+
+    async def _prepare_turn_images(
+        self,
+        turns: list[dict[str, Any]],
+        *,
+        temp_dir: str,
+        base_filename: str,
+        temp_files: set[str],
+    ) -> int:
+        prepared_image_count = 0
+
+        for turn_index, turn in enumerate(turns):
+            if turn.get("role") != "user":
+                continue
+
+            selected_attachments = list(turn.get("selected_image_attachments", []))
+            total_image_count = self._safe_int(turn.get("total_image_count"), 0)
+            image_paths: list[str] = []
+
+            for image_index, attachment in enumerate(selected_attachments):
+                _, image_extension = os.path.splitext(attachment.filename)
+                if not image_extension:
+                    image_extension = ".img"
+
+                image_path = os.path.join(temp_dir, f"{base_filename}_turn{turn_index}_{image_index}{image_extension}")
+
+                try:
+                    await attachment.save(image_path)
+                    temp_files.add(image_path)
+
+                    final_path = await self._compress_image(image_path)
+                    temp_files.add(final_path)
+                    image_paths.append(final_path)
+                except Exception as e:
+                    print(f"⚠️ [快速答疑] 保存上下文图片失败: {attachment.filename} -> {type(e).__name__}: {e}")
+
+            turn["image_paths"] = image_paths
+            turn["omitted_image_count"] = max(0, total_image_count - len(image_paths))
+            prepared_image_count += len(image_paths)
+
+        return prepared_image_count
+
+    def _build_openai_messages(self, turns: list[dict[str, Any]], system_prompt: str) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        if any(turn.get("role") == "assistant" for turn in turns):
+            messages.append({"role": "system", "content": REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT})
+
+        total_size_kb = 0.0
+        for turn_index, turn in enumerate(turns, start=1):
+            if turn.get("role") == "assistant":
+                messages.append({"role": "assistant", "content": turn.get("text", "")})
+                continue
+
+            user_text = self._build_user_turn_prompt_text(turn)
+            user_content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+
+            for image_path in turn.get("image_paths", []):
+                size_kb = self._get_file_size_kb(image_path)
+                total_size_kb += size_kb
+                print(f"📎 添加图片到 API 请求: turn={turn_index} {os.path.basename(image_path)} ({size_kb:.2f}KB)")
+                base64_image = encode_image_to_base64(image_path)
+                user_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": base64_image},
+                    }
+                )
+
+            messages.append({"role": "user", "content": user_content})
+
+        if total_size_kb > 0:
             print(f"📊 API 请求图片总大小: {total_size_kb:.2f}KB")
 
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ]
+        return messages
 
-    def _archive_prompt(self, user_id: int, text: str, image_paths: list[str], system_prompt: str) -> None:
+    def _archive_prompt(self, user_id: int, turns: list[dict[str, Any]], system_prompt: str) -> None:
         try:
             save_dir = "app_save"
             os.makedirs(save_dir, exist_ok=True)
@@ -552,13 +923,33 @@ class AppDayi(commands.Cog):
             save_filename = f"{timestamp}_{user_id}.txt"
             save_path = os.path.join(save_dir, save_filename)
 
+            history_user_index = 0
+            history_ai_index = 0
             with open(save_path, "w", encoding="utf-8") as f:
                 f.write("=== 系统提示词 ===\n")
                 f.write(system_prompt)
-                f.write("\n\n=== 用户提问 ===\n")
-                f.write(text)
-                if image_paths:
-                    f.write(f"\n[包含 {len(image_paths)} 张图片附件]\n")
+
+                for turn in turns:
+                    if turn.get("role") == "assistant":
+                        history_ai_index += 1
+                        f.write(f"\n\n=== 历史 AI 回复 #{history_ai_index} ===\n")
+                        f.write(turn.get("text", ""))
+                        continue
+
+                    label = "当前用户消息" if turn.get("is_current") else "历史用户消息"
+                    if not turn.get("is_current"):
+                        history_user_index += 1
+                        label = f"{label} #{history_user_index}"
+
+                    f.write(f"\n\n=== {label} ===\n")
+                    f.write(self._build_user_turn_prompt_text(turn))
+
+                    included_image_count = len(turn.get("image_paths", []))
+                    omitted_image_count = self._safe_int(turn.get("omitted_image_count"), 0)
+                    if included_image_count:
+                        f.write(f"\n[已附带图片 {included_image_count} 张]")
+                    if omitted_image_count:
+                        f.write(f"\n[未附带原图 {omitted_image_count} 张]")
 
             print(f"✅ 已存档提示词到 {save_path}")
         except Exception as e:
@@ -644,40 +1035,18 @@ class AppDayi(commands.Cog):
             public_session.append(fallback_text)
         return fallback_text
 
-    def _cleanup_temp_files(
-        self,
-        *,
-        text_path: Optional[str],
-        image_paths: list[str],
-        image_attachments: list[discord.Attachment],
-        temp_dir: str,
-        base_filename: str,
-    ) -> None:
+    def _cleanup_temp_files(self, *, temp_files: set[str]) -> None:
         if os.getenv("DELETE_TEMP_FILES", "false").lower() != "true":
             return
 
-        if text_path and os.path.exists(text_path):
+        for temp_path in sorted(path for path in temp_files if path):
+            if not os.path.exists(temp_path):
+                continue
             try:
-                os.remove(text_path)
-                print(f"🗑️ 已删除临时文件: {os.path.basename(text_path)}")
+                os.remove(temp_path)
+                print(f"🗑️ 已删除临时文件: {os.path.basename(temp_path)}")
             except Exception as e:
-                print(f" [33m[警告] [0m 删除临时文件 {text_path} 时出错: {e}")
-
-        all_image_paths = set(path for path in image_paths if path)
-        for idx, attachment in enumerate(image_attachments):
-            _, image_extension = os.path.splitext(attachment.filename)
-            original_path = os.path.join(temp_dir, f"{base_filename}_{idx}{image_extension}")
-            compressed_path = f"{os.path.splitext(original_path)[0]}_compressed.jpg"
-            all_image_paths.add(original_path)
-            all_image_paths.add(compressed_path)
-
-        for image_path in all_image_paths:
-            if image_path and os.path.exists(image_path):
-                try:
-                    os.remove(image_path)
-                    print(f"🗑️ 已删除临时文件: {os.path.basename(image_path)}")
-                except Exception as e:
-                    print(f" [33m[警告] [0m 删除临时文件 {image_path} 时出错: {e}")
+                print(f" [33m[警告] [0m 删除临时文件 {temp_path} 时出错: {e}")
 
     async def quick_dayi(self, interaction: discord.Interaction, message: discord.Message):
         """对消息使用快速答疑，并通过公开普通消息流式回复。"""
@@ -686,14 +1055,14 @@ class AppDayi(commands.Cog):
         user_id = interaction.user.id
         target_user = message.author
         target_user_id = str(target_user.id)
-        text = message.content if message.content else "这是什么问题，怎么解决"
-        image_attachments = [att for att in message.attachments if self._is_image_attachment(att)]
+        current_image_attachments = self._get_message_image_attachments(message)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_filename = f"{timestamp}_{user_id}"
         temp_dir = "app_temp"
-        text_path: Optional[str] = None
-        image_paths: list[str] = []
+        temp_files: set[str] = set()
+        conversation_turns: list[dict[str, Any]] = []
+        history_pairs_newest_first: list[dict[str, Any]] = []
         public_session: Optional[PublicStreamReply] = None
         parallel_slot_acquired = False
         display_model_name = self._get_display_model_name()
@@ -718,22 +1087,22 @@ class AppDayi(commands.Cog):
                 await self._send_public_error(interaction, message, "❌ 此命令仅限答疑组使用。")
                 return
 
-            if len(image_attachments) > MAX_IMAGE_ATTACHMENTS:
-                print(f"⚠️ [快速答疑] 图片数量超限: {len(image_attachments)} > {MAX_IMAGE_ATTACHMENTS}")
+            if len(current_image_attachments) > MAX_IMAGE_ATTACHMENTS:
+                print(f"⚠️ [快速答疑] 图片数量超限: {len(current_image_attachments)} > {MAX_IMAGE_ATTACHMENTS}")
                 await self._send_public_error(
                     interaction,
                     message,
                     (
                         "❌ 图片数量超出限制！\n"
-                        f"当前消息包含 {len(image_attachments)} 张图片，系统最多支持 {MAX_IMAGE_ATTACHMENTS} 张图片。\n"
+                        f"当前消息包含 {len(current_image_attachments)} 张图片，系统最多支持 {MAX_IMAGE_ATTACHMENTS} 张图片。\n"
                         "请减少图片数量后重试。"
                     ),
                 )
                 return
 
-            if image_attachments:
-                print(f"📸 [快速答疑] 检测到 {len(image_attachments)} 张图片附件")
-                for idx, attachment in enumerate(image_attachments, start=1):
+            if current_image_attachments:
+                print(f"📸 [快速答疑] 检测到 {len(current_image_attachments)} 张当前消息图片附件")
+                for idx, attachment in enumerate(current_image_attachments, start=1):
                     print(f"   图片{idx}: {attachment.filename} ({attachment.size / 1024:.2f} KB)")
 
             if not async_client:
@@ -781,32 +1150,47 @@ class AppDayi(commands.Cog):
 
             os.makedirs(temp_dir, exist_ok=True)
 
-            text_path = os.path.join(temp_dir, f"{base_filename}.txt")
-            with open(text_path, "w", encoding="utf-8") as f:
-                f.write(text)
+            await public_session.set_status(STATUS_RESOLVING_CONTEXT)
+            history_pairs_newest_first = await self._collect_reply_chain_history(message)
+            selected_image_counts = self._select_context_image_counts(message, history_pairs_newest_first)
+            conversation_turns = self._build_conversation_turns(message, history_pairs_newest_first, selected_image_counts)
 
-            for idx, image_attachment in enumerate(image_attachments):
-                _, image_extension = os.path.splitext(image_attachment.filename)
-                image_path = os.path.join(temp_dir, f"{base_filename}_{idx}{image_extension}")
-                await image_attachment.save(image_path)
-                image_paths.append(image_path)
-
-            if image_paths:
-                print(f"📸 保存了 {len(image_paths)} 张图片")
+            planned_image_count = sum(
+                len(turn.get("selected_image_attachments", []))
+                for turn in conversation_turns
+                if turn.get("role") == "user"
+            )
+            if planned_image_count:
+                print(f"📸 [快速答疑] 计划附带上下文图片 {planned_image_count} 张（总上限 {MAX_IMAGE_ATTACHMENTS} 张）")
                 await public_session.set_status(STATUS_PROCESSING_IMAGES)
-                image_paths = await asyncio.gather(*[self._compress_image(path) for path in image_paths])
-                print("✅ 图片压缩完成")
+                prepared_image_count = await self._prepare_turn_images(
+                    conversation_turns,
+                    temp_dir=temp_dir,
+                    base_filename=base_filename,
+                    temp_files=temp_files,
+                )
+                print(f"✅ 图片处理完成，实际附带 {prepared_image_count} 张")
 
             system_prompt = self._load_default_prompt()
-            messages = self._build_openai_messages(text, image_paths, system_prompt)
-            self._archive_prompt(user_id, text, image_paths, system_prompt)
+            messages = self._build_openai_messages(conversation_turns, system_prompt)
+            self._archive_prompt(user_id, conversation_turns, system_prompt)
+
+            total_image_paths = [
+                image_path
+                for turn in conversation_turns
+                if turn.get("role") == "user"
+                for image_path in turn.get("image_paths", [])
+            ]
+            current_text = self._get_base_user_message_text(message, is_current=True)
 
             print("📤 [API请求] 准备发送请求:")
             print(f"   - 模型: {os.getenv('OPENAI_MODEL')}")
-            print(f"   - 文本长度: {len(text)} 字符")
-            print(f"   - 图片数量: {len(image_paths)} 张")
-            if image_paths:
-                print(f"   - 图片总大小: {sum(self._get_file_size_kb(path) for path in image_paths):.2f} KB")
+            print(f"   - 当前消息文本长度: {len(current_text)} 字符")
+            print(f"   - 回复链历史轮数: {len(history_pairs_newest_first)}")
+            print(f"   - 上下文消息数: {len(conversation_turns)}")
+            print(f"   - 图片数量: {len(total_image_paths)} 张")
+            if total_image_paths:
+                print(f"   - 图片总大小: {sum(self._get_file_size_kb(path) for path in total_image_paths):.2f} KB")
 
             await public_session.set_status(STATUS_REQUESTING_AI)
             ai_response = await asyncio.wait_for(
@@ -828,10 +1212,6 @@ class AppDayi(commands.Cog):
                 public_session,
                 (
                     "⏱️ 答疑超时：处理时间超过 3 分钟，请求已被终止。\n"
-                    "建议：\n"
-                    "• 简化问题描述\n"
-                    "• 减小图片尺寸\n"
-                    "• 稍后重试"
                 ),
             )
 
@@ -840,7 +1220,7 @@ class AppDayi(commands.Cog):
                 interaction,
                 message,
                 public_session,
-                "❌ AI 没有返回可用内容，请稍后重试。",
+                "❌ AI 没有返回可用内容，请重试。若问题连续发生，请联系BOT管理员。",
             )
 
         except openai.APIConnectionError as e:
@@ -849,7 +1229,7 @@ class AppDayi(commands.Cog):
                 interaction,
                 message,
                 public_session,
-                "❌ 无法连接到 AI 服务，请稍后重试。",
+                "❌ 无法连接到 AI 服务，请重试。若问题连续发生，请联系BOT管理员。",
             )
 
         except openai.RateLimitError as e:
@@ -858,7 +1238,7 @@ class AppDayi(commands.Cog):
                 interaction,
                 message,
                 public_session,
-                "❌ AI 服务当前较忙，请稍后再试。",
+                "❌ AI 服务当前较忙，请再试。若问题连续发生，请联系BOT管理员。",
             )
 
         except openai.AuthenticationError as e:
@@ -876,7 +1256,7 @@ class AppDayi(commands.Cog):
                 interaction,
                 message,
                 public_session,
-                f"❌ AI 服务返回异常状态（HTTP {e.status_code}），请稍后再试。",
+                f"❌ AI 服务返回异常状态（HTTP {e.status_code}），请再试。若问题连续发生，请联系BOT管理员。",
             )
 
         except json.JSONDecodeError as e:
@@ -885,7 +1265,7 @@ class AppDayi(commands.Cog):
                 interaction,
                 message,
                 public_session,
-                "❌ AI 服务返回了无效响应，请稍后重试。",
+                "❌ AI 服务返回了无效响应，请重试。若问题连续发生，请联系BOT管理员。",
             )
 
         except Exception as e:
@@ -905,13 +1285,7 @@ class AppDayi(commands.Cog):
             if parallel_slot_acquired:
                 self.bot.current_parallel_dayi_tasks = max(0, self.bot.current_parallel_dayi_tasks - 1)
 
-            self._cleanup_temp_files(
-                text_path=text_path,
-                image_paths=image_paths,
-                image_attachments=image_attachments,
-                temp_dir=temp_dir,
-                base_filename=base_filename,
-            )
+            self._cleanup_temp_files(temp_files=temp_files)
 
     def _load_default_prompt(self) -> str:
         """加载默认的完整知识库提示词，并进行缓存。"""
