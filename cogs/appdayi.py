@@ -138,6 +138,7 @@ class PublicStreamReply:
         self.started_at = time.monotonic()
         self.reply_session_id = reply_session_id or uuid.uuid4().hex[:12]
         self.reply_kind = "partial"
+        self.context_user_input_count = 1
 
         self.messages: list[discord.Message] = []
         self.full_text = ""
@@ -341,7 +342,10 @@ class PublicStreamReply:
 
     def _build_footer_line(self) -> str:
         elapsed_seconds = max(1, int(round(time.monotonic() - self.started_at)))
-        footer_text = f"time: {elapsed_seconds} s | 由{self.display_model_name}提供支持 | {self.requester_name} 问的。"
+        footer_text = (
+            f"time: {elapsed_seconds} s | 由{self.display_model_name}提供支持 | {self.requester_name} 问的"
+            f" | 本次上下文共使用了 {max(1, int(self.context_user_input_count))} 次用户输入。"
+        )
         return build_qd_auxiliary_line("qd-footer", footer_text)
 
     def _build_meta_line(self, *, chunk_index: int, total_chunks: int) -> str:
@@ -1152,6 +1156,7 @@ class AppDayi(commands.Cog):
 
             await public_session.set_status(STATUS_RESOLVING_CONTEXT)
             history_pairs_newest_first = await self._collect_reply_chain_history(message)
+            public_session.context_user_input_count = len(history_pairs_newest_first) + 1
             selected_image_counts = self._select_context_image_counts(message, history_pairs_newest_first)
             conversation_turns = self._build_conversation_turns(message, history_pairs_newest_first, selected_image_counts)
 
