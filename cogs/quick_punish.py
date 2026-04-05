@@ -1167,12 +1167,12 @@ class QuickPunishCog(commands.Cog):
             f"你在以下服务器的一些身份组已被移除：{server_role_text}。原因：{reason}\n",
             f"此处罚在{confirm_time}由{executor.name}确认。\n",
             third_content.strip(),
-            "\n请仔细阅读以上内容和社区规则，重新完成新人验证答题。"
+            "\n请仔细阅读以上内容和社区规则，重新完成新人验证答题： https://discord.com/channels/1134557553011998840/1338036166221365339 "
         ]
         
         # 添加申诉信息
         if self.appeal_channel_id:
-            dm_parts.append("\n## 请勿回复此信息。\n\n如有异议，请**不要**私信联系处罚执行者或管理员；请使用 https://discord.com/channels/1134557553011998840/1284458379615666269 开ticket向管理组反馈。")
+            dm_parts.append("\n## ⚠️ 请勿回复此消息，机器人不会读取或转发私信。\n\n在**重新阅读上方内容和[社区规则](https://discord.com/channels/1134557553011998840/1401896293181292715/1428266657045938206)之后**，如果你认为此处罚存在**事实性错误**（例如：处罚对象搞错了、你使用的API/云酒馆被误认为违规第三方提供等），请开 ticket 向管理组申诉。\n\n⛔ **以下无效申诉将不予回复：**\n - 不读完上方说明就开ticket，只反问「我做了什么」，「凭什么罚我」的\n- 申诉内容为「不理解相关规则」或「不知道相关规则」，主张无知者无罪的\n- 觉得规则不合理，想来找管理辩论，更改规则的\n")
         
         return "\n".join(dm_parts)
     

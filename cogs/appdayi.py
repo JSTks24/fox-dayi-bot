@@ -343,8 +343,7 @@ class PublicStreamReply:
     def _build_footer_line(self) -> str:
         elapsed_seconds = max(1, int(round(time.monotonic() - self.started_at)))
         footer_text = (
-            f"time: {elapsed_seconds} s | 由{self.display_model_name}提供支持 | {self.requester_name} 问的"
-            f" | 本次上下文共使用了 {max(1, int(self.context_user_input_count))} 次用户输入。"
+            f"time: {elapsed_seconds} s | 由{self.display_model_name}提供支持 | ctx: {max(1, int(self.context_user_input_count))} turns | {self.requester_name} 问的"
         )
         return build_qd_auxiliary_line("qd-footer", footer_text)
 
