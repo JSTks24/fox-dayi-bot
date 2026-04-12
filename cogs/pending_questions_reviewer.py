@@ -8,7 +8,8 @@ import ast
 import json
 import asyncio
 import io
-from typing import Dict, List, Optional, Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 # ================= 配置映射 =================
 # 新手开帖 论坛频道 ID
@@ -45,9 +46,9 @@ class UnansweredFilter(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         # AI 请求/响应跟踪信息（用于手动扫描后的管理员私信报告）
-        self._last_ai_raw_response_text: Optional[str] = None
+        self._last_ai_raw_response_text: str | None = None
         self._last_ai_response_note: str = "尚未调用 AI"
-        self._ai_request_logs: List[Dict[str, Any]] = []
+        self._ai_request_logs: list[dict[str, Any]] = []
         self._ai_expected_total_batches: int = 0
         self._ai_expected_total_threads: int = 0
 
@@ -128,7 +129,7 @@ class UnansweredFilter(commands.Cog):
 
         return str(content)
 
-    def _parse_ai_json_response(self, content: Any) -> Optional[Dict[str, Any]]:
+    def _parse_ai_json_response(self, content: Any) -> dict[str, Any] | None:
         """尽可能稳健地解析 AI 返回的 JSON 文本。"""
         raw_text = self._stringify_ai_content(content).strip()
 
@@ -215,7 +216,7 @@ class UnansweredFilter(commands.Cog):
             parts.append(f"[文件附件x{file_count}]")
         return " ".join(parts)
 
-    def _chunk_threads(self, threads_data: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    def _chunk_threads(self, threads_data: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         """按配置的批大小切分待分析帖子。"""
         if not threads_data:
             return []
@@ -359,12 +360,12 @@ class UnansweredFilter(commands.Cog):
 
         return resolved_tag, unsolved_tag, threads_to_analyze, unchanged_results
 
-    async def _call_gemini_batch(self, threads_data: List[Dict[str, Any]], batch_index: int, total_batches: int) -> Dict[str, Any]:
+    async def _call_gemini_batch(self, threads_data: list[dict[str, Any]], batch_index: int, total_batches: int) -> dict[str, Any]:
         """发送单个批次的审计请求给 Gemini，返回结构化执行结果。"""
         started_at = datetime.datetime.now(datetime.timezone.utc)
         thread_ids = [int(item.get("data", {}).get("id", 0)) for item in threads_data]
 
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "batch_index": batch_index,
             "total_batches": total_batches,
             "thread_ids": [tid for tid in thread_ids if tid],
@@ -490,7 +491,7 @@ class UnansweredFilter(commands.Cog):
 
         return result
 
-    def _build_ai_fallback_reason(self, thread_id: int, batch_index_map: Dict[int, int], batch_logs_map: Dict[int, Dict[str, Any]]) -> str:
+    def _build_ai_fallback_reason(self, thread_id: int, batch_index_map: dict[int, int], batch_logs_map: dict[int, dict[str, Any]]) -> str:
         """当线程没有拿到有效 AI 结果时，生成可落库的失败原因。"""
         batch_idx = batch_index_map.get(thread_id)
         if not batch_idx:
@@ -513,7 +514,7 @@ class UnansweredFilter(commands.Cog):
     async def _edit_thread_tags_with_archive_handling(
         self,
         thread: discord.Thread,
-        new_tags: List[discord.ForumTag],
+        new_tags: list[discord.ForumTag],
         reason: str
     ):
         """更新帖子标签：若帖子已归档，则先解档，更新标签后再归档。"""
@@ -680,8 +681,8 @@ class UnansweredFilter(commands.Cog):
             return {"solved": 0, "unsolved": 0}
 
         # 1. AI 批次判定（每批最多 4 帖，间隔 10 秒）
-        ai_results_map: Dict[int, Dict[str, Any]] = {}
-        thread_batch_index_map: Dict[int, int] = {}
+        ai_results_map: dict[int, dict[str, Any]] = {}
+        thread_batch_index_map: dict[int, int] = {}
 
         if threads_to_analyze:
             batches = self._chunk_threads(threads_to_analyze)
@@ -726,7 +727,7 @@ class UnansweredFilter(commands.Cog):
         else:
             self._last_ai_response_note = "本次扫描无需 AI 判定（无新增/变更帖子）"
 
-        batch_logs_map: Dict[int, Dict[str, Any]] = {
+        batch_logs_map: dict[int, dict[str, Any]] = {
             int(log.get("batch_index")): log
             for log in self._ai_request_logs
             if log.get("batch_index") is not None

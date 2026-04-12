@@ -1,0 +1,14 @@
+[tool.ruff.lint]
+# 除了默认的 E, F，额外添加：
+# B: Bugbear (代码缺陷)
+# PERF: Perflint (性能)
+# ARG: Unused arguments (未使用参数)
+# UP: Pyupgrade (现代语法，通常性能更好)
+select = ["E", "F", "B","PERF","UP"]
+# 忽略 Line too long
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 忽略测试和临时脚本中的E402
+"tests/conftest.py" = ["E402"]
+"scripts/check_m1_repositories.py" = ["E402"]

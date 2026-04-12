@@ -11,7 +11,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import discord
 import openai
@@ -95,7 +95,7 @@ def build_qd_meta_line(*, session_id: str, source_message_id: int, chunk_index: 
     return build_qd_auxiliary_line("qd-meta", payload)
 
 
-def extract_qd_meta(content: str) -> Optional[dict[str, Any]]:
+def extract_qd_meta(content: str) -> dict[str, Any] | None:
     match = QD_META_LINE_REGEX.search(content)
     if not match:
         return None
@@ -128,7 +128,7 @@ class PublicStreamReply:
         *,
         message_limit: int = PUBLIC_MESSAGE_LIMIT,
         edit_interval: float = STREAM_EDIT_INTERVAL_SECONDS,
-        reply_session_id: Optional[str] = None,
+        reply_session_id: str | None = None,
     ):
         self.source_message = source_message
         self.display_model_name = (display_model_name or "未知模型")[:80]
@@ -147,7 +147,7 @@ class PublicStreamReply:
         self._dirty = False
         self._show_footer = False
         self._closed = False
-        self._flush_task: Optional[asyncio.Task] = None
+        self._flush_task: asyncio.Task | None = None
         self._render_lock = asyncio.Lock()
 
     @property
@@ -362,7 +362,7 @@ class AppDayi(commands.Cog):
         self.bot = bot
         self.message_cooldowns: dict[int, datetime] = {}
         self.cooldown_duration = 30
-        self._default_prompt_cache: Optional[str] = None
+        self._default_prompt_cache: str | None = None
 
         self.ctx_menu = app_commands.ContextMenu(
             name="快速答疑",
@@ -516,7 +516,7 @@ class AppDayi(commands.Cog):
         self,
         interaction: discord.Interaction,
         message: discord.Message,
-        public_session: Optional[PublicStreamReply],
+        public_session: PublicStreamReply | None,
         content: str,
     ) -> None:
         if public_session:
@@ -530,10 +530,10 @@ class AppDayi(commands.Cog):
 
         await self._acknowledge_public_result(interaction, "ℹ️ 错误信息已公开发送到频道。")
 
-    def _get_active_ban_entry(self, target_user_id: str) -> Optional[dict[str, Any]]:
+    def _get_active_ban_entry(self, target_user_id: str) -> dict[str, Any] | None:
         banlist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "banlist.json")
         try:
-            with open(banlist_path, "r", encoding="utf-8") as f:
+            with open(banlist_path, encoding="utf-8") as f:
                 banlist_data = json.load(f)
         except FileNotFoundError:
             print("⚠️ banlist.json 文件不存在，跳过封禁检查")
@@ -640,7 +640,7 @@ class AppDayi(commands.Cog):
             return "".join(parts)
         return str(content)
 
-    def _parse_quick_dayi_meta(self, message: discord.Message) -> Optional[dict[str, Any]]:
+    def _parse_quick_dayi_meta(self, message: discord.Message) -> dict[str, Any] | None:
         bot_user = self.bot.user
         if not bot_user or message.author.id != bot_user.id:
             return None
@@ -652,14 +652,14 @@ class AppDayi(commands.Cog):
             return None
         return meta
 
-    async def _fetch_message_by_id(self, channel: Any, message_id: int) -> Optional[discord.Message]:
+    async def _fetch_message_by_id(self, channel: Any, message_id: int) -> discord.Message | None:
         try:
             return await channel.fetch_message(message_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
             print(f"⚠️ [快速答疑] 获取消息 {message_id} 失败: {type(e).__name__}: {e}")
             return None
 
-    async def _resolve_referenced_message(self, message: discord.Message) -> Optional[discord.Message]:
+    async def _resolve_referenced_message(self, message: discord.Message) -> discord.Message | None:
         reference = message.reference
         if not reference or not reference.message_id:
             return None
@@ -673,7 +673,7 @@ class AppDayi(commands.Cog):
     async def _reconstruct_quick_dayi_answer(
         self,
         bot_message: discord.Message,
-    ) -> Optional[tuple[discord.Message, str]]:
+    ) -> tuple[discord.Message, str] | None:
         meta = self._parse_quick_dayi_meta(bot_message)
         if not meta or str(meta.get("kind")) != "answer":
             return None
@@ -1066,7 +1066,7 @@ class AppDayi(commands.Cog):
         temp_files: set[str] = set()
         conversation_turns: list[dict[str, Any]] = []
         history_pairs_newest_first: list[dict[str, Any]] = []
-        public_session: Optional[PublicStreamReply] = None
+        public_session: PublicStreamReply | None = None
         parallel_slot_acquired = False
         display_model_name = self._get_display_model_name()
         async_client = getattr(self.bot, "openai_async_client", None)
@@ -1298,7 +1298,7 @@ class AppDayi(commands.Cog):
 
         prompt_file = "prompt/ALL.txt"
         try:
-            with open(prompt_file, "r", encoding="utf-8") as f:
+            with open(prompt_file, encoding="utf-8") as f:
                 system_prompt = f.read().strip()
             if not system_prompt:
                 system_prompt = DEFAULT_SYSTEM_PROMPT

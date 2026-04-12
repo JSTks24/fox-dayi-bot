@@ -6,7 +6,7 @@ import os
 import sqlite3
 from datetime import datetime
 import json
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Any
 import aiofiles
 from dotenv import load_dotenv
 import io
@@ -90,6 +90,72 @@ class QuickPunishModal(discord.ui.Modal):
             pass
 
 
+class RemoteQuickPunishModal(discord.ui.Modal):
+    """远距快速处罚表单：在一个modal里完成原因与私信模板选择，提交即执行"""
+
+    def __init__(self, target_message: discord.Message, cog):
+        super().__init__(title=target_message.author.display_name)
+        self.target_message = target_message
+        self.target_user = target_message.author
+        self.cog = cog
+
+        self.reason = discord.ui.TextInput(
+            placeholder="请输入处罚原因（留空则使用默认值'付费违规第三方'）",
+            required=False,
+            max_length=100,
+            style=discord.TextStyle.short
+        )
+        self.add_item(discord.ui.Label(
+            text="处罚原因",
+            description="留空则使用默认值“付费违规第三方”",
+            component=self.reason
+        ))
+
+        self.template_select = discord.ui.Select(
+            placeholder="选择私信模板（不选则默认第三方API）",
+            min_values=0,
+            max_values=1,
+            options=self.cog._get_dm_template_select_options(),
+            required=False
+        )
+        self.add_item(discord.ui.Label(
+            text="私信模板",
+            description="可留空，留空时将使用 default.txt",
+            component=self.template_select
+        ))
+
+    async def safe_defer(self, interaction: discord.Interaction):
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.safe_defer(interaction)
+
+        reason = self.reason.value.strip() or "付费违规第三方"
+        selected_values = getattr(self.template_select, "values", []) or []
+        chosen_template = selected_values[0] if selected_values and selected_values[0] != "__none__" else "default.txt"
+
+        success, message, punishment_history = await self.cog.execute_punishment(
+            interaction=interaction,
+            target_user=self.target_user,
+            target_message=self.target_message,
+            reason=reason,
+            executor=interaction.user,
+            dm_template_filename=chosen_template
+        )
+
+        result_embed = self.cog.build_punishment_result_embed(success, message, punishment_history, interaction.user)
+        await interaction.followup.send(embed=result_embed, ephemeral=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        print(f"RemoteQuickPunishModal错误: {error}")
+        try:
+            await self.safe_defer(interaction)
+            await interaction.followup.send(f"❌ 发生错误：{str(error)}", ephemeral=True)
+        except:
+            pass
+
+
 class QuickPunishConfirmView(discord.ui.View):
     """二次确认视图：包含模板选择下拉选单与确认/取消按钮"""
     def __init__(self, cog, target_message: discord.Message, target_user: discord.User, reason: str):
@@ -98,7 +164,7 @@ class QuickPunishConfirmView(discord.ui.View):
         self.target_message = target_message
         self.target_user = target_user
         self.reason = reason
-        self.selected_template_filename: Optional[str] = None
+        self.selected_template_filename: str | None = None
         # 添加下拉选单（动态读取xiaozuowen目录的txt文件）
         self.add_item(TemplateSelect(cog=self.cog))
 
@@ -133,56 +199,9 @@ class QuickPunishConfirmView(discord.ui.View):
         )
 
         # 更新消息（移除交互视图）
-        if success:
-            embed = discord.Embed(
-                title="✅ 处罚执行成功",
-                description=message,
-                color=discord.Color.green(),
-                timestamp=datetime.now()
-            )
-            if punishment_history:
-                history_lines = []
-                for record in punishment_history[:5]:  # 最多显示5条历史记录
-                    try:
-                        timestamp_dt = datetime.fromisoformat(record['timestamp'])
-                        time_str = timestamp_dt.strftime('%Y-%m-%d %H:%M')
-                    except:
-                        time_str = record['timestamp'][:16]
-
-                    status_emoji = {
-                        'executed': '✅',
-                        'failed': '❌',
-                        'revoked': '↩️'
-                    }.get(record['status'], '❓')
-
-                    source_tag = f"[{record.get('source_type', 'local')}]"
-
-                    history_lines.append(
-                        f"{status_emoji} {source_tag} **第{record['punish_count']}次** - {time_str}\n"
-                        f"   原因: {record['reason'][:30]}{'...' if len(record['reason']) > 30 else ''}\n"
-                        f"   执行者: {record['executor_name']}"
-                    )
-
-                embed.add_field(
-                    name=f"📋 该用户的处罚历史（共{len(punishment_history)}条）",
-                    value="\n".join(history_lines) if history_lines else "无历史记录",
-                    inline=False
-                )
-
-            embed.set_footer(text=f"执行者: {interaction.user.name}")
-            self._disable_all()
-            await interaction.edit_original_response(embed=embed, view=None)
-        else:
-            self._disable_all()
-            is_duplicate_prevented = self.cog._is_duplicate_punishment_message(message)
-            embed = discord.Embed(
-                title="⚠️ 本次未重复执行处罚" if is_duplicate_prevented else "❌ 处罚执行失败",
-                description=message,
-                color=discord.Color.orange() if is_duplicate_prevented else discord.Color.red(),
-                timestamp=datetime.now()
-            )
-            embed.set_footer(text=f"操作人: {interaction.user.name}")
-            await interaction.edit_original_response(embed=embed, view=None)
+        self._disable_all()
+        embed = self.cog.build_punishment_result_embed(success, message, punishment_history, interaction.user)
+        await interaction.edit_original_response(embed=embed, view=None)
 
     @discord.ui.button(label="取消", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -201,7 +220,7 @@ class QuickPunishConfirmView(discord.ui.View):
 class RevokeConfirmView(discord.ui.View):
     """撤销二次确认：当最近记录是sync时，确认是否回溯撤销local记录"""
 
-    def __init__(self, cog, target_user_id: str, latest_record: Dict[str, Any], revoke_record: Dict[str, Any]):
+    def __init__(self, cog, target_user_id: str, latest_record: dict[str, Any], revoke_record: dict[str, Any]):
         super().__init__(timeout=180)
         self.cog = cog
         self.target_user_id = target_user_id
@@ -258,17 +277,7 @@ class TemplateSelect(discord.ui.Select):
     """下拉选单：选择要发送的私信模板（文件名）"""
     def __init__(self, cog):
         self.cog = cog
-        options = []
-        try:
-            for fn in sorted(self.cog.dm_templates.keys()):
-                # 排除默认模板，仅在未选择时使用
-                if fn.lower() == "default.txt":
-                    continue
-                options.append(discord.SelectOption(label=fn, value=fn))
-        except Exception as e:
-            print(f"构建模板选项失败: {e}")
-        if not options:
-            options = [discord.SelectOption(label="无可用模板", value="__none__", description="xiaozuowen目录下未找到txt文件")]
+        options = self.cog._get_dm_template_select_options()
         super().__init__(placeholder="要发送的私信模板（不选默认为第三方API）", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -310,15 +319,15 @@ class QuickPunishCog(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
-        self._punish_locks: Dict[int, asyncio.Lock] = {}
+        self._punish_locks: dict[int, asyncio.Lock] = {}
 
         # 从环境变量加载配置
         self.enabled = os.getenv("QUICK_PUNISH_ENABLED", "false").lower() == "true"
         self.sync_config_path = os.path.join("cogs", "config", "quick_punish_sync.json")
         self.allowed_roles = self._parse_role_ids(os.getenv("QUICK_PUNISH_ROLES", ""))
         self.remove_roles = self._parse_role_ids(os.getenv("QUICK_PUNISH_REMOVE_ROLES", ""))
-        self.log_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_LOG_CHANNEL"))
-        self.log_thread_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_LOG_THREAD"))
+        self.log_channel_ids = self._parse_channel_ids(os.getenv("QUICK_PUNISH_LOG_CHANNEL", ""))
+        self.log_thread_ids = self._parse_channel_ids(os.getenv("QUICK_PUNISH_LOG_THREAD", ""))
         self.interface_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_INTERFACE_CHANNEL"))
         self.appeal_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_APPEAL_CHANNEL"))
 
@@ -329,11 +338,11 @@ class QuickPunishCog(commands.Cog):
         self.init_database()
 
         # 加载xiaozuowen目录中的txt模板（不硬编码文件名）
-        self.dm_templates: Dict[str, str] = {}
+        self.dm_templates: dict[str, str] = {}
         self._load_dm_templates()
 
     
-    def _parse_role_ids(self, role_str: str) -> List[int]:
+    def _parse_role_ids(self, role_str: str) -> list[int]:
         """解析身份组ID字符串"""
         if not role_str:
             return []
@@ -343,7 +352,7 @@ class QuickPunishCog(commands.Cog):
             print(f"警告：无法解析身份组ID: {role_str}")
             return []
     
-    def _parse_channel_id(self, channel_str: str) -> Optional[int]:
+    def _parse_channel_id(self, channel_str: str) -> int | None:
         """解析频道ID字符串"""
         if not channel_str:
             return None
@@ -351,11 +360,25 @@ class QuickPunishCog(commands.Cog):
             return int(channel_str.strip())
         except ValueError:
             print(f"警告：无法解析频道ID: {channel_str}")
-            return None
 
-    def _load_sync_config(self) -> Dict[str, Any]:
+    def _parse_channel_ids(self, channel_str: str) -> list[int]:
+        """解析频道ID字符串（支持逗号分隔的多个ID）"""
+        if not channel_str:
+            return []
+        result = []
+        for part in channel_str.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                result.append(int(part))
+            except ValueError:
+                print(f"警告：无法解析频道ID: {part}")
+        return result
+
+    def _load_sync_config(self) -> dict[str, Any]:
         """加载并校验双服同步配置"""
-        default_config: Dict[str, Any] = {
+        default_config: dict[str, Any] = {
             "version": 1,
             "sync_guild_ids": [],
             "guilds": {},
@@ -367,7 +390,7 @@ class QuickPunishCog(commands.Cog):
             return default_config
 
         try:
-            with open(self.sync_config_path, "r", encoding="utf-8") as f:
+            with open(self.sync_config_path, encoding="utf-8") as f:
                 raw = json.load(f)
         except Exception as e:
             print(f"警告：读取同步配置失败: {e}")
@@ -377,7 +400,7 @@ class QuickPunishCog(commands.Cog):
             print("警告：quick_punish_sync.json 顶层必须是对象")
             return default_config
 
-        sync_ids: List[str] = []
+        sync_ids: list[str] = []
         for gid in raw.get("sync_guild_ids", []):
             try:
                 sync_ids.append(str(int(str(gid).strip())))
@@ -385,7 +408,7 @@ class QuickPunishCog(commands.Cog):
                 print(f"警告：sync_guild_ids 中存在无效guild id: {gid}")
 
         guild_cfg_raw = raw.get("guilds", {}) if isinstance(raw.get("guilds", {}), dict) else {}
-        guilds: Dict[str, Dict[str, List[int]]] = {}
+        guilds: dict[str, dict[str, list[int]]] = {}
         for gid, cfg in guild_cfg_raw.items():
             gid_str = str(gid).strip()
             if not gid_str:
@@ -420,7 +443,7 @@ class QuickPunishCog(commands.Cog):
             "policy": {"mode": mode}
         }
 
-    def _get_sync_guild_ids(self, trigger_guild_id: Optional[int] = None) -> List[str]:
+    def _get_sync_guild_ids(self, trigger_guild_id: int | None = None) -> list[str]:
         ids = list(self.sync_config.get("sync_guild_ids", []))
         if trigger_guild_id is not None:
             gid = str(trigger_guild_id)
@@ -430,7 +453,7 @@ class QuickPunishCog(commands.Cog):
             return [str(trigger_guild_id)]
         return ids
 
-    def _get_guild_sync_config(self, guild_id: int) -> Dict[str, List[int]]:
+    def _get_guild_sync_config(self, guild_id: int) -> dict[str, list[int]]:
         cfg = self.sync_config.get("guilds", {}).get(str(guild_id), {})
         if not isinstance(cfg, dict):
             cfg = {}
@@ -449,11 +472,11 @@ class QuickPunishCog(commands.Cog):
         if self._punish_locks.get(user_id) is lock and not lock.locked():
             self._punish_locks.pop(user_id, None)
 
-    def _is_already_processed_result(self, result: Optional[Dict[str, Any]]) -> bool:
+    def _is_already_processed_result(self, result: dict[str, Any] | None) -> bool:
         already_processed_codes = {"no_removable_roles", "removal_conflict"}
         return bool(result) and result.get("code") in already_processed_codes
 
-    def _all_sync_results_already_processed(self, results: List[Dict[str, Any]]) -> bool:
+    def _all_sync_results_already_processed(self, results: list[dict[str, Any]]) -> bool:
         return bool(results) and all(self._is_already_processed_result(item) for item in results)
 
     def _is_duplicate_punishment_message(self, message: str) -> bool:
@@ -471,11 +494,89 @@ class QuickPunishCog(commands.Cog):
         base_dir = 'xiaozuowen'
         try:
             for fn in os.listdir(base_dir):
-                if fn.lower().endswith('.txt'):
+                fn_lower = fn.lower()
+                if fn_lower.endswith('.txt') and fn_lower != 'public.txt':
                     self.dm_templates[fn] = os.path.join(base_dir, fn)
             print(f"已加载DM模板: {list(self.dm_templates.keys())}")
         except Exception as e:
             print(f"加载DM模板失败: {e}")
+
+    def _get_dm_template_select_options(self) -> list[discord.SelectOption]:
+        """构建可选的私信模板下拉选项（不含 default.txt / public.txt）"""
+        options: list[discord.SelectOption] = []
+        try:
+            for fn in sorted(self.dm_templates.keys()):
+                fn_lower = fn.lower()
+                if fn_lower in {"default.txt", "public.txt"}:
+                    continue
+                options.append(discord.SelectOption(label=fn, value=fn))
+        except Exception as e:
+            print(f"构建模板选项失败: {e}")
+
+        if not options:
+            options = [
+                discord.SelectOption(
+                    label="无可用模板",
+                    value="__none__",
+                    description="xiaozuowen目录下未找到可选私信模板"
+                )
+            ]
+        return options
+
+    def build_punishment_result_embed(self,
+                                     success: bool,
+                                     message: str,
+                                     punishment_history: list[dict[str, Any]],
+                                     operator: discord.abc.User) -> discord.Embed:
+        """构建处罚执行结果回执Embed，供不同交互入口复用"""
+        if success:
+            embed = discord.Embed(
+                title="✅ 处罚执行成功",
+                description=message,
+                color=discord.Color.green(),
+                timestamp=datetime.now()
+            )
+            if punishment_history:
+                history_lines = []
+                for record in punishment_history[:5]:  # 最多显示5条历史记录
+                    try:
+                        timestamp_dt = datetime.fromisoformat(record['timestamp'])
+                        time_str = timestamp_dt.strftime('%Y-%m-%d %H:%M')
+                    except:
+                        time_str = record['timestamp'][:16]
+
+                    status_emoji = {
+                        'executed': '✅',
+                        'failed': '❌',
+                        'revoked': '↩️'
+                    }.get(record['status'], '❓')
+
+                    source_tag = f"[{record.get('source_type', 'local')}]"
+
+                    history_lines.append(
+                        f"{status_emoji} {source_tag} **第{record['punish_count']}次** - {time_str}\n"
+                        f"   原因: {record['reason'][:30]}{'...' if len(record['reason']) > 30 else ''}\n"
+                        f"   执行者: {record['executor_name']}"
+                    )
+
+                embed.add_field(
+                    name=f"📋 该用户的处罚历史（共{len(punishment_history)}条）",
+                    value="\n".join(history_lines) if history_lines else "无历史记录",
+                    inline=False
+                )
+
+            embed.set_footer(text=f"执行者: {operator.name}")
+            return embed
+
+        is_duplicate_prevented = self._is_duplicate_punishment_message(message)
+        embed = discord.Embed(
+            title="⚠️ 本次未重复执行处罚" if is_duplicate_prevented else "❌ 处罚执行失败",
+            description=message,
+            color=discord.Color.orange() if is_duplicate_prevented else discord.Color.red(),
+            timestamp=datetime.now()
+        )
+        embed.set_footer(text=f"操作人: {operator.name}")
+        return embed
 
     def init_database(self):
         """初始化数据库并执行幂等迁移"""
@@ -550,7 +651,7 @@ class QuickPunishCog(commands.Cog):
         user_roles = [role.id for role in interaction.user.roles]
         return any(role_id in user_roles for role_id in allowed_roles)
 
-    def _parse_json_list(self, value: Any) -> List[int]:
+    def _parse_json_list(self, value: Any) -> list[int]:
         if isinstance(value, list):
             return [int(x) for x in value if str(x).strip().isdigit()]
         if value is None:
@@ -563,7 +664,7 @@ class QuickPunishCog(commands.Cog):
             pass
         return []
 
-    def _parse_json_roles_by_guild(self, value: Any) -> Dict[str, List[int]]:
+    def _parse_json_roles_by_guild(self, value: Any) -> dict[str, list[int]]:
         if value is None:
             return {}
         try:
@@ -574,7 +675,7 @@ class QuickPunishCog(commands.Cog):
         if not isinstance(loaded, dict):
             return {}
 
-        result: Dict[str, List[int]] = {}
+        result: dict[str, list[int]] = {}
         for gid, roles in loaded.items():
             gid_str = str(gid).strip()
             if not gid_str:
@@ -608,7 +709,7 @@ class QuickPunishCog(commands.Cog):
         conn.close()
         return count
 
-    async def get_user_punishment_history(self, user_id: str, limit: int = 5) -> List[Dict]:
+    async def get_user_punishment_history(self, user_id: str, limit: int = 5) -> list[dict]:
         """获取用户的处罚历史记录"""
         conn = sqlite3.connect('quick_punish.db')
         cursor = conn.cursor()
@@ -646,7 +747,7 @@ class QuickPunishCog(commands.Cog):
             print(f"发送私信时出错: {e}")
             return False
     
-    async def remove_user_roles(self, member: discord.Member, roles_to_remove: List[int]) -> Tuple[List[int], bool]:
+    async def remove_user_roles(self, member: discord.Member, roles_to_remove: list[int]) -> tuple[list[int], bool]:
         """移除用户的身份组
         返回: (实际被移除的身份组ID列表, 是否成功移除了至少一个身份组)
         """
@@ -672,11 +773,11 @@ class QuickPunishCog(commands.Cog):
             raise
     
     async def log_to_database_with_count(self, user: discord.User, message: discord.Message,
-                                        executor: discord.User, reason: str, removed_roles: List[int],
+                                        executor: discord.User, reason: str, removed_roles: list[int],
                                         punish_count: int, status: str = "executed",
                                         source_type: str = "local",
-                                        removed_roles_by_guild: Optional[Dict[str, List[int]]] = None,
-                                        source_guild_id: Optional[str] = None) -> Tuple[int, int]:
+                                        removed_roles_by_guild: dict[str, list[int]] | None = None,
+                                        source_guild_id: str | None = None) -> tuple[int, int]:
         """记录处罚信息到数据库（使用事务确保原子性）"""
         conn = sqlite3.connect('quick_punish.db')
         conn.isolation_level = None  # 自动提交模式
@@ -738,9 +839,9 @@ class QuickPunishCog(commands.Cog):
 
     async def send_log_embed(self, channel: discord.abc.Messageable, user: discord.User,
                             executor: discord.User, reason: str, message_link: str,
-                            removed_roles: List[int], record_id: int,
-                            trigger_guild: Optional[discord.Guild] = None,
-                            sync_results: Optional[List[Dict[str, Any]]] = None,
+                            removed_roles: list[int], record_id: int,
+                            trigger_guild: discord.Guild | None = None,
+                            sync_results: list[dict[str, Any]] | None = None,
                             original_message: discord.Message = None):
         """发送日志Embed到指定频道，并转发原消息"""
         embed = discord.Embed(
@@ -886,7 +987,7 @@ class QuickPunishCog(commands.Cog):
             await channel.send(embed=error_embed)
     
     async def _resolve_member_in_guild(self, guild: discord.Guild, user_id: int,
-                                       force_fetch: bool = False) -> Optional[discord.Member]:
+                                       force_fetch: bool = False) -> discord.Member | None:
         cached_member = guild.get_member(user_id)
         if cached_member and not force_fetch:
             return cached_member
@@ -897,8 +998,8 @@ class QuickPunishCog(commands.Cog):
 
     async def _execute_role_removal_in_guild(self, guild_id: str,
                                              target_user_id: int,
-                                             trigger_guild_id: Optional[int] = None,
-                                             force_fetch: bool = False) -> Dict[str, Any]:
+                                             trigger_guild_id: int | None = None,
+                                             force_fetch: bool = False) -> dict[str, Any]:
         result = {
             "guild_id": guild_id,
             "guild_name": guild_id,
@@ -958,7 +1059,7 @@ class QuickPunishCog(commands.Cog):
             result["code"] = "removal_error"
             return result
 
-    def _format_sync_results(self, results: List[Dict[str, Any]]) -> str:
+    def _format_sync_results(self, results: list[dict[str, Any]]) -> str:
         lines = []
         for item in results:
             if item.get("success"):
@@ -972,7 +1073,7 @@ class QuickPunishCog(commands.Cog):
                                 target_message: discord.Message,
                                 reason: str,
                                 executor: discord.User,
-                                dm_template_filename: Optional[str] = None) -> tuple[bool, str, List[Dict]]:
+                                dm_template_filename: str | None = None) -> tuple[bool, str, list[dict]]:
         """执行处罚的主要逻辑，返回(成功状态, 消息, 处罚历史)"""
         trigger_guild = interaction.guild
         if trigger_guild is None:
@@ -988,7 +1089,7 @@ class QuickPunishCog(commands.Cog):
         await punish_lock.acquire()
         try:
             sync_guild_ids = self._get_sync_guild_ids(trigger_guild.id)
-            sync_results: List[Dict[str, Any]] = []
+            sync_results: list[dict[str, Any]] = []
 
             for guild_id in sync_guild_ids:
                 sync_results.append(
@@ -1055,27 +1156,28 @@ class QuickPunishCog(commands.Cog):
             )
 
             try:
-                async with aiofiles.open('xiaozuowen/public.txt', 'r', encoding='utf-8') as f:
+                async with aiofiles.open('xiaozuowen/public.txt', encoding='utf-8') as f:
                     public_content = await f.read()
                 await target_message.channel.send(public_content.strip())
             except Exception as e:
                 print(f"发送public.txt内容失败: {e}")
 
-            log_destination = await self._get_log_destination()
-            if log_destination:
+            log_destinations = await self._get_log_destinations()
+            if log_destinations:
                 message_link = f"https://discord.com/channels/{trigger_guild.id}/{target_message.channel.id}/{target_message.id}"
-                await self.send_log_embed(
-                    channel=log_destination,
-                    user=target_user,
-                    executor=executor,
-                    reason=reason,
-                    message_link=message_link,
-                    removed_roles=trigger_removed_roles,
-                    record_id=record_id,
-                    trigger_guild=trigger_guild,
-                    sync_results=sync_results,
-                    original_message=target_message
-                )
+                for log_dest in log_destinations:
+                    await self.send_log_embed(
+                        channel=log_dest,
+                        user=target_user,
+                        executor=executor,
+                        reason=reason,
+                        message_link=message_link,
+                        removed_roles=trigger_removed_roles,
+                        record_id=record_id,
+                        trigger_guild=trigger_guild,
+                        sync_results=sync_results,
+                        original_message=target_message
+                    )
 
             if self.interface_channel_id:
                 try:
@@ -1118,14 +1220,14 @@ class QuickPunishCog(commands.Cog):
     async def _build_dm_content(self, target_message: discord.Message,
                                reason: str, executor: discord.User,
                                punish_count: int,
-                               dm_template_filename: Optional[str] = None,
-                               removal_results: Optional[List[Dict[str, Any]]] = None) -> str:
+                               dm_template_filename: str | None = None,
+                               removal_results: list[dict[str, Any]] | None = None) -> str:
         """构建私信内容"""
         # 读取3rd.txt文件内容
         third_content = "请重新完成新人验证答题。"  # 默认内容
 
         # 构建“服务器 + 被移除身份组”说明
-        server_role_parts: List[str] = []
+        server_role_parts: list[str] = []
         for item in (removal_results or []):
             if not item.get("success"):
                 continue
@@ -1134,7 +1236,7 @@ class QuickPunishCog(commands.Cog):
             guild_name = item.get("guild_name", "未知服务器")
             removed_role_ids = self._parse_json_list(item.get("removed_roles", []))
 
-            role_names: List[str] = []
+            role_names: list[str] = []
             guild_obj = self.bot.get_guild(int(guild_id)) if guild_id.isdigit() else None
             for role_id in removed_role_ids:
                 role_name = None
@@ -1156,7 +1258,7 @@ class QuickPunishCog(commands.Cog):
         try:
             if dm_template_filename and dm_template_filename in getattr(self, "dm_templates", {}):
                 template_path = self.dm_templates[dm_template_filename]
-                async with aiofiles.open(template_path, 'r', encoding='utf-8') as f:
+                async with aiofiles.open(template_path, encoding='utf-8') as f:
                     third_content = await f.read()
         except Exception as e:
             print(f"读取模板文件失败: {e}")
@@ -1178,7 +1280,7 @@ class QuickPunishCog(commands.Cog):
     
     async def _send_channel_notification(self, channel: discord.TextChannel,
                                         user: discord.User, executor: discord.User,
-                                        reason: str, removed_roles: List[int]):
+                                        reason: str, removed_roles: list[int]):
         """在原频道发送处罚通知"""
         embed = discord.Embed(
             title="⚠️ 快速处罚",
@@ -1200,7 +1302,7 @@ class QuickPunishCog(commands.Cog):
         except Exception as e:
             print(f"发送频道通知时出错: {e}")
     
-    async def get_recent_punishments(self, count: int = 3, max_count: int = 1000) -> List[Dict]:
+    async def get_recent_punishments(self, count: int = 3, max_count: int = 1000) -> list[dict]:
         """获取最近的处罚记录"""
         count = min(count, max_count)
         count = max(count, 1)
@@ -1234,7 +1336,7 @@ class QuickPunishCog(commands.Cog):
         conn.close()
         return records
 
-    async def format_punishment_records(self, records: List[Dict], guild: discord.Guild) -> str:
+    async def format_punishment_records(self, records: list[dict], guild: discord.Guild) -> str:
         """格式化处罚记录为文本"""
         if not records:
             return "暂无处罚记录"
@@ -1273,7 +1375,7 @@ class QuickPunishCog(commands.Cog):
 
         return "\n".join(lines)
 
-    def _row_to_record(self, row: tuple) -> Dict[str, Any]:
+    def _row_to_record(self, row: tuple) -> dict[str, Any]:
         return {
             'id': row[0],
             'user_id': row[1],
@@ -1293,13 +1395,13 @@ class QuickPunishCog(commands.Cog):
             'source_guild_id': row[15] if len(row) > 15 else None
         }
 
-    def _has_restore_basis(self, record: Dict[str, Any]) -> bool:
+    def _has_restore_basis(self, record: dict[str, Any]) -> bool:
         by_guild = record.get('removed_roles_by_guild', {})
         if isinstance(by_guild, dict) and any(v for v in by_guild.values()):
             return True
         return bool(record.get('removed_roles'))
 
-    async def get_last_punishment_for_user(self, user_id: str) -> Optional[Dict]:
+    async def get_last_punishment_for_user(self, user_id: str) -> dict | None:
         """获取用户最近一次 executed 处罚记录"""
         conn = sqlite3.connect('quick_punish.db')
         cursor = conn.cursor()
@@ -1322,7 +1424,7 @@ class QuickPunishCog(commands.Cog):
             return None
         return self._row_to_record(row)
 
-    async def get_last_revocable_local_record_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+    async def get_last_revocable_local_record_for_user(self, user_id: str) -> dict[str, Any] | None:
         """获取最近可撤销（有恢复依据）的 local executed 记录"""
         conn = sqlite3.connect('quick_punish.db')
         cursor = conn.cursor()
@@ -1362,7 +1464,7 @@ class QuickPunishCog(commands.Cog):
 
         return affected > 0
 
-    async def restore_user_roles(self, member: discord.Member, roles_to_restore: List[int]) -> Tuple[List[int], List[int]]:
+    async def restore_user_roles(self, member: discord.Member, roles_to_restore: list[int]) -> tuple[list[int], list[int]]:
         """恢复用户的身份组
         返回: (成功恢复的身份组ID列表, 失败的身份组ID列表)
         """
@@ -1396,38 +1498,55 @@ class QuickPunishCog(commands.Cog):
         
         return restored_roles, failed_roles
     
-    async def _get_log_destination(self):
-        """全局获取日志发送目标（优先子区，其次频道）"""
-        log_destination = None
+    async def _get_log_destinations(self) -> list[discord.abc.Messageable]:
+        """获取所有有效的日志发送目标（支持多个子区和频道同时发送）"""
+        destinations: list[discord.abc.Messageable] = []
+        seen_ids: set = set()  # 去重：同一个ID不重复添加
 
-        if self.log_thread_id:
-            log_destination = self.bot.get_channel(self.log_thread_id)
-            if not log_destination:
+        # 1) 收集所有子区
+        for thread_id in self.log_thread_ids:
+            if thread_id in seen_ids:
+                continue
+            ch = self.bot.get_channel(thread_id)
+            if not ch:
                 try:
-                    log_destination = await self.bot.fetch_channel(self.log_thread_id)
+                    ch = await self.bot.fetch_channel(thread_id)
                 except Exception:
-                    log_destination = None
-
-            if isinstance(log_destination, discord.Thread) and log_destination.archived:
+                    ch = None
+            if ch is None:
+                print(f"警告：无法获取日志子区 {thread_id}，已跳过")
+                continue
+            # 如果是已归档的子区，自动解档
+            if isinstance(ch, discord.Thread) and ch.archived:
                 try:
-                    await log_destination.edit(archived=False)
+                    await ch.edit(archived=False)
                 except Exception:
                     pass
+            seen_ids.add(thread_id)
+            destinations.append(ch)
 
-        if not log_destination and self.log_channel_id:
-            log_destination = self.bot.get_channel(self.log_channel_id)
-            if not log_destination:
+        # 2) 收集所有频道
+        for channel_id in self.log_channel_ids:
+            if channel_id in seen_ids:
+                continue
+            ch = self.bot.get_channel(channel_id)
+            if not ch:
                 try:
-                    log_destination = await self.bot.fetch_channel(self.log_channel_id)
+                    ch = await self.bot.fetch_channel(channel_id)
                 except Exception:
-                    log_destination = None
+                    ch = None
+            if ch is None:
+                print(f"警告：无法获取日志频道 {channel_id}，已跳过")
+                continue
+            seen_ids.add(channel_id)
+            destinations.append(ch)
 
-        return log_destination
+        return destinations
 
-    def _build_restore_targets(self, record: Dict[str, Any], fallback_guild_id: Optional[int]) -> Dict[str, List[int]]:
+    def _build_restore_targets(self, record: dict[str, Any], fallback_guild_id: int | None) -> dict[str, list[int]]:
         by_guild = record.get("removed_roles_by_guild", {}) or {}
         if by_guild:
-            restored: Dict[str, List[int]] = {}
+            restored: dict[str, list[int]] = {}
             for gid, roles in by_guild.items():
                 parsed_roles = self._parse_json_list(roles)
                 if parsed_roles:
@@ -1444,14 +1563,14 @@ class QuickPunishCog(commands.Cog):
             return {}
         return {str(source_gid): legacy_roles}
 
-    async def _execute_revoke_record(self, interaction: discord.Interaction, user_id: str, record: Dict[str, Any]) -> Tuple[bool, str]:
+    async def _execute_revoke_record(self, interaction: discord.Interaction, user_id: str, record: dict[str, Any]) -> tuple[bool, str]:
         restore_targets = self._build_restore_targets(record, interaction.guild.id if interaction.guild else None)
         if not restore_targets:
             return False, f"在数据库中找不到（{user_id}）的上次处罚移除了什么身份组，可能是由于上次处罚来源于同步，请检查日志频道。"
 
-        restored_roles: List[int] = []
-        failed_roles: List[int] = []
-        detail_lines: List[str] = []
+        restored_roles: list[int] = []
+        failed_roles: list[int] = []
+        detail_lines: list[str] = []
 
         for guild_id, roles in restore_targets.items():
             guild = self.bot.get_guild(int(guild_id)) if str(guild_id).isdigit() else None
@@ -1475,10 +1594,10 @@ class QuickPunishCog(commands.Cog):
         if not success:
             return False, "❌ 撤销处罚失败，可能记录已被修改"
 
-        log_destination = await self._get_log_destination()
-        if log_destination:
+        log_destinations = await self._get_log_destinations()
+        for log_dest in log_destinations:
             await self.send_revoke_log_embed(
-                channel=log_destination,
+                channel=log_dest,
                 record=record,
                 revoker=interaction.user,
                 restored_roles=restored_roles,
@@ -1497,9 +1616,9 @@ class QuickPunishCog(commands.Cog):
         return True, message
 
     async def send_revoke_log_embed(self, channel: discord.abc.Messageable,
-                                   record: Dict, revoker: discord.User,
-                                   restored_roles: List[int], failed_roles: List[int],
-                                   restore_targets: Dict[str, List[int]]):
+                                   record: dict, revoker: discord.User,
+                                   restored_roles: list[int], failed_roles: list[int],
+                                   restore_targets: dict[str, list[int]]):
         """发送撤销日志Embed到指定频道"""
         embed = discord.Embed(
             title="↩️ 快速处罚撤销",
@@ -1541,7 +1660,7 @@ class QuickPunishCog(commands.Cog):
     @app_commands.command(name="快速处罚-查询", description="查询最近的快速处罚记录")
     @app_commands.describe(count="要查询的记录数量（默认3条，最多1000条）")
     @app_commands.guild_only()
-    async def quick_punish_query(self, interaction: discord.Interaction, count: Optional[int] = 3):
+    async def quick_punish_query(self, interaction: discord.Interaction, count: int | None = 3):
         """查询快速处罚记录命令"""
         # 立即defer响应
         await interaction.response.defer(ephemeral=True)
@@ -1735,45 +1854,54 @@ class QuickPunishCog(commands.Cog):
 
 
 # 定义上下文菜单命令（必须在类外部）
+async def _validate_quick_punish_context(interaction: discord.Interaction,
+                                         message: discord.Message,
+                                         action_name: str) -> QuickPunishCog | None:
+    cog = interaction.client.get_cog('QuickPunishCog')
+    if not cog:
+        await interaction.response.send_message("❌ 模块未加载", ephemeral=True)
+        return None
+
+    if not cog.enabled:
+        await interaction.response.send_message(f"❌ {action_name}功能未启用，请联系机器人开发者。", ephemeral=True)
+        return None
+
+    if not cog.has_permission(interaction):
+        await interaction.response.send_message(
+            f"❌ 没权。只有管理组和类脑自研答疑AI可以给人{action_name}。",
+            ephemeral=True
+        )
+        return None
+
+    if message.author.bot:
+        await interaction.response.send_message("❌ 不能对Bot使用这个命令。", ephemeral=True)
+        return None
+
+    return cog
+
+
 @app_commands.context_menu(name="愉悦送走")
 @app_commands.guild_only()
 async def quick_punish_context(interaction: discord.Interaction, message: discord.Message):
     """快速处罚上下文菜单命令"""
-    # 获取cog实例
-    cog = interaction.client.get_cog('QuickPunishCog')
+    cog = await _validate_quick_punish_context(interaction, message, "愉悦送走")
     if not cog:
-        await interaction.response.send_message(
-            "❌ 模块未加载",
-            ephemeral=True
-        )
         return
-    
-    # 检查功能是否启用
-    if not cog.enabled:
-        await interaction.response.send_message(
-            "❌ 愉悦送走功能未启用，请联系机器人开发者。",
-            ephemeral=True
-        )
-        return
-    
-    # 检查权限
-    if not cog.has_permission(interaction):
-        await interaction.response.send_message(
-            "❌ 没权。只有管理组和类脑自研答疑AI可以给人愉悦送走。",
-            ephemeral=True
-        )
-        return
-    
-    # 检查目标是否是机器人
-    if message.author.bot:
-        await interaction.response.send_message(
-            "❌ 不能给Bot愉悦送走。",
-            ephemeral=True
-        )
-        return
-    
+
     # 显示确认表单
     modal = QuickPunishModal(target_message=message, cog=cog)
+    await interaction.response.send_modal(modal)
+
+
+@app_commands.context_menu(name="远距送走")
+@app_commands.guild_only()
+async def remote_quick_punish_context(interaction: discord.Interaction, message: discord.Message):
+    """远距快速处罚上下文菜单命令：在一个modal内完成所有输入并直接执行"""
+    cog = await _validate_quick_punish_context(interaction, message, "远距送走")
+    if not cog:
+        return
+
+    modal = RemoteQuickPunishModal(target_message=message, cog=cog)
     await interaction.response.send_modal(modal)
 
 
@@ -1784,3 +1912,4 @@ async def setup(bot):
     
     # 添加上下文菜单命令
     bot.tree.add_command(quick_punish_context)
+    bot.tree.add_command(remote_quick_punish_context)

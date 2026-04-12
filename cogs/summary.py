@@ -4,7 +4,6 @@ from discord import app_commands
 import os
 import openai
 import asyncio
-from typing import Optional, List, Dict, Tuple
 import re
 
 # --- 安全的 defer 函数 ---
@@ -18,7 +17,7 @@ async def safe_defer(interaction: discord.Interaction):
         # ephemeral=True 让这个"占坑"行为对其他人不可见，不刷屏。
         await interaction.response.defer(ephemeral=True)
 
-TEMPLATE_CONFIG: Dict[str, Dict[str, str]] = {
+TEMPLATE_CONFIG: dict[str, dict[str, str]] = {
     "judge": {
         "display": "判决",
         "head_path": "summary_prompt/judge_head.txt",
@@ -55,12 +54,12 @@ DEFAULT_TEMPLATE_KEY = "auto"
 MAX_MESSAGE_LENGTH = 2000
 CHUNK_SAFE_LENGTH = 1800
 
-def chunk_text(text: str, limit: int = CHUNK_SAFE_LENGTH) -> List[str]:
+def chunk_text(text: str, limit: int = CHUNK_SAFE_LENGTH) -> list[str]:
     """按行优先切分长文本，确保不超过Discord消息长度限制"""
     if not text:
         return []
 
-    chunks: List[str] = []
+    chunks: list[str] = []
     remaining = text
 
     while remaining:
@@ -88,7 +87,7 @@ class Summary(commands.Cog):
         self.default_head_prompt = "请总结以下Discord消息记录：\n"
         self.default_end_prompt = "\n请提供详细的总结和分析。"
         
-    def parse_discord_link(self, link: str) -> Tuple[int, int, int]:
+    def parse_discord_link(self, link: str) -> tuple[int, int, int]:
         """
         解析Discord消息链接，提取guild_id, channel_id, message_id
         
@@ -158,7 +157,7 @@ class Summary(commands.Cog):
             return None
     async def fetch_messages_batch(self, channel: discord.TextChannel,
                                   start_message: discord.Message,
-                                  count: int) -> List[discord.Message]:
+                                  count: int) -> list[discord.Message]:
         """
         分批获取消息，每100条休息2秒
         
@@ -209,7 +208,7 @@ class Summary(commands.Cog):
                 
         return messages
     
-    def format_messages_for_prompt(self, messages: List[discord.Message]) -> str:
+    def format_messages_for_prompt(self, messages: list[discord.Message]) -> str:
         """
         格式化消息列表为提示词格式
         
@@ -247,7 +246,7 @@ class Summary(commands.Cog):
         
         return "\n".join(formatted_lines)
     
-    def load_prompts(self, template_key: str) -> Tuple[str, str]:
+    def load_prompts(self, template_key: str) -> tuple[str, str]:
         """
         根据模板配置加载提示词头部和尾部
 
@@ -262,14 +261,14 @@ class Summary(commands.Cog):
         end_path = config.get("end_path", "")
 
         try:
-            with open(head_path, 'r', encoding='utf-8') as f:
+            with open(head_path, encoding='utf-8') as f:
                 head_prompt = f.read().strip()
         except FileNotFoundError:
             print(f"⚠️ 未找到 {head_path}，使用默认头部提示词")
             head_prompt = self.default_head_prompt
 
         try:
-            with open(end_path, 'r', encoding='utf-8') as f:
+            with open(end_path, encoding='utf-8') as f:
                 end_prompt = f.read().strip()
         except FileNotFoundError:
             print(f"⚠️ 未找到 {end_path}，使用默认尾部提示词")
@@ -293,7 +292,7 @@ class Summary(commands.Cog):
                                 interaction: discord.Interaction,
                                 message_link: str,
                                 message_count: int,
-                                template: Optional[app_commands.Choice[str]] = None):
+                                template: app_commands.Choice[str] | None = None):
         """
         AI快速总结并评判功能的斜杠命令
         """
@@ -489,7 +488,7 @@ class Summary(commands.Cog):
                 loop.run_in_executor(
                     None,
                     lambda: self.bot.openai_client.chat.completions.create(
-                        model="gemini-3-pro-preview",  # 🔥 硬编码模型
+                        model="gemini-3.1-pro-preview",  # 🔥 硬编码模型
                         messages=messages_for_api,
                         temperature=1.0,
                         max_tokens=65535

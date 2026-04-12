@@ -11,7 +11,6 @@ import asyncio
 import os
 from datetime import datetime, timedelta
 import logging
-from typing import Dict, List, Optional, Tuple
 import traceback
 import base64
 import mimetypes
@@ -29,9 +28,9 @@ class MentionCog(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
-        self.settings: Dict = {}
-        self.threads: Dict = {}
-        self.usage_stats: Dict = {}
+        self.settings: dict = {}
+        self.threads: dict = {}
+        self.usage_stats: dict = {}
         
         self.settings_path = 'mention/settings.json'
         self.threads_path = 'mention/threads.json'
@@ -43,12 +42,12 @@ class MentionCog(commands.Cog):
         self.lock = asyncio.Lock()  # 防止并发修改
         
         # 冷却追踪器
-        self.thread_cooldowns: Dict[str, datetime] = {}  # {thread_id: last_used_time}
-        self.user_cooldowns: Dict[str, datetime] = {}  # {user_id: last_used_time}
+        self.thread_cooldowns: dict[str, datetime] = {}  # {thread_id: last_used_time}
+        self.user_cooldowns: dict[str, datetime] = {}  # {user_id: last_used_time}
         
         # fail2ban 追踪器
-        self.fail2ban_records: Dict[str, List[datetime]] = {}  # {user_id: [fail_time1, fail_time2, ...]}
-        self.fail2ban_banned: Dict[str, datetime] = {}  # {user_id: ban_until_time}
+        self.fail2ban_records: dict[str, list[datetime]] = {}  # {user_id: [fail_time1, fail_time2, ...]}
+        self.fail2ban_banned: dict[str, datetime] = {}  # {user_id: ban_until_time}
         
         # 确保目录存在
         os.makedirs('mention', exist_ok=True)
@@ -85,7 +84,7 @@ class MentionCog(commands.Cog):
         """加载全局设置文件"""
         try:
             if os.path.exists(self.settings_path):
-                with open(self.settings_path, 'r', encoding='utf-8') as f:
+                with open(self.settings_path, encoding='utf-8') as f:
                     self.settings = json.load(f)
                 logger.info("已加载全局设置")
             else:
@@ -120,7 +119,7 @@ class MentionCog(commands.Cog):
         """加载子区配置文件"""
         try:
             if os.path.exists(self.threads_path):
-                with open(self.threads_path, 'r', encoding='utf-8') as f:
+                with open(self.threads_path, encoding='utf-8') as f:
                     self.threads = json.load(f)
                 logger.info(f"已加载 {len(self.threads)} 个子区配置")
             else:
@@ -143,7 +142,7 @@ class MentionCog(commands.Cog):
         """加载使用统计数据"""
         try:
             if os.path.exists(self.usage_stats_path):
-                with open(self.usage_stats_path, 'r', encoding='utf-8') as f:
+                with open(self.usage_stats_path, encoding='utf-8') as f:
                     self.usage_stats = json.load(f)
                 logger.info("已加载使用统计数据")
                 # 清理过期数据
@@ -353,7 +352,7 @@ class MentionCog(commands.Cog):
     
     # ===== 冷却检查 =====
     
-    def check_thread_cooldown(self, thread_id: str) -> Tuple[bool, int]:
+    def check_thread_cooldown(self, thread_id: str) -> tuple[bool, int]:
         """
         检查子区冷却
         返回: (is_on_cooldown, remaining_seconds)
@@ -376,7 +375,7 @@ class MentionCog(commands.Cog):
         """更新子区冷却时间"""
         self.thread_cooldowns[thread_id] = datetime.now()
     
-    def check_user_cooldown(self, user_id: str) -> Tuple[bool, int]:
+    def check_user_cooldown(self, user_id: str) -> tuple[bool, int]:
         """
         检查用户冷却
         返回: (is_on_cooldown, remaining_seconds)
@@ -397,7 +396,7 @@ class MentionCog(commands.Cog):
         """更新用户冷却时间"""
         self.user_cooldowns[user_id] = datetime.now()
     
-    def check_daily_limit(self, user_id: str) -> Tuple[bool, int]:
+    def check_daily_limit(self, user_id: str) -> tuple[bool, int]:
         """
         检查用户每日请求限制
         返回: (is_exceeded, current_count)
@@ -430,7 +429,7 @@ class MentionCog(commands.Cog):
     
     # ===== fail2ban 功能 =====
     
-    def check_fail2ban(self, user_id: str) -> Tuple[bool, Optional[int]]:
+    def check_fail2ban(self, user_id: str) -> tuple[bool, int | None]:
         """
         检查用户是否被 fail2ban 封禁
         返回: (is_banned, remaining_minutes)
@@ -640,7 +639,7 @@ class MentionCog(commands.Cog):
             except:
                 pass
     
-    async def check_preset_reply(self, message: discord.Message, thread_id: str) -> Optional[str]:
+    async def check_preset_reply(self, message: discord.Message, thread_id: str) -> str | None:
         """
         检查是否匹配预设回复
         返回: 预设回复内容，或 None
@@ -866,7 +865,7 @@ class MentionCog(commands.Cog):
                 except Exception as e:
                     logger.warning(f"删除临时文件失败 {temp_file}: {e}")
     
-    async def extract_message_context(self, message: discord.Message, thread_id: str) -> Tuple[str, List[str], List[str]]:
+    async def extract_message_context(self, message: discord.Message, thread_id: str) -> tuple[str, list[str], list[str]]:
         """
         提取消息内容和上下文
         返回: (用户消息文本, 上下文消息列表, 图片路径列表)
@@ -997,7 +996,7 @@ class MentionCog(commands.Cog):
         
         return content if content else "[空消息]"
     
-    def _extract_embed_content(self, embeds: List[discord.Embed]) -> List[str]:
+    def _extract_embed_content(self, embeds: list[discord.Embed]) -> list[str]:
         """
         提取 embed 消息的文本内容
         
@@ -1091,7 +1090,7 @@ class MentionCog(commands.Cog):
         # 如果已有缓存，直接读取
         if os.path.exists(metadata_file):
             try:
-                with open(metadata_file, 'r', encoding='utf-8') as f:
+                with open(metadata_file, encoding='utf-8') as f:
                     metadata = f.read().strip()
                     if metadata:
                         logger.info(f"从缓存加载子区 {thread_id} 的元数据")
@@ -1148,7 +1147,7 @@ class MentionCog(commands.Cog):
             logger.error(f"获取子区元数据失败: {e}")
             return ""
     
-    async def build_prompt(self, thread_id: str, context_messages: List[str]) -> str:
+    async def build_prompt(self, thread_id: str, context_messages: list[str]) -> str:
         """
         构建系统提示词
         """
@@ -1163,7 +1162,7 @@ class MentionCog(commands.Cog):
         
         # 加载基础提示词
         try:
-            with open(base_prompt_path, 'r', encoding='utf-8') as f:
+            with open(base_prompt_path, encoding='utf-8') as f:
                 system_prompt = f.read().strip()
         except FileNotFoundError:
             logger.warning(f"提示词文件不存在: {base_prompt_path}")
@@ -1179,7 +1178,7 @@ class MentionCog(commands.Cog):
         has_custom_kb = False
         if os.path.exists(kb_file):
             try:
-                with open(kb_file, 'r', encoding='utf-8') as f:
+                with open(kb_file, encoding='utf-8') as f:
                     kb_content = f.read().strip()
                     if kb_content:
                         system_prompt += "\n\n[专属知识库]\n" + kb_content
@@ -1486,7 +1485,7 @@ class MentionCog(commands.Cog):
     
     @app_commands.command(name='答疑bot-创建子区配置', description='[Admin] 为指定子区创建默认配置')
     @app_commands.describe(thread_id='子区ID（可选，不填则使用当前子区）')
-    async def create_thread_config(self, interaction: discord.Interaction, thread_id: Optional[str] = None):
+    async def create_thread_config(self, interaction: discord.Interaction, thread_id: str | None = None):
         """创建子区配置"""
         # 检查权限
         if not isinstance(interaction.user, discord.Member):

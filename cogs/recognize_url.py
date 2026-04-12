@@ -5,7 +5,6 @@ import os
 import asyncio
 import json
 from datetime import datetime
-from typing import Optional
 from PIL import Image
 import io
 import time
@@ -159,7 +158,7 @@ class RecognizeURL(commands.Cog):
     def _load_json(self, file_path: str) -> dict:
         """加载JSON文件"""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
             print(f"⚠️ 文件不存在: {file_path}")
@@ -185,7 +184,7 @@ class RecognizeURL(commands.Cog):
         """组合完整提示词"""
         try:
             # 读取基础提示词
-            with open('api_table/prompt.txt', 'r', encoding='utf-8') as f:
+            with open('api_table/prompt.txt', encoding='utf-8') as f:
                 base_prompt = f.read().strip()
             
             # 读取good.json和bad.json
@@ -219,8 +218,8 @@ class RecognizeURL(commands.Cog):
         user: discord.User,
         operation_type: str,
         url: str,
-        name: Optional[str] = None,
-        description: Optional[str] = None,
+        name: str | None = None,
+        description: str | None = None,
         success: bool = True
     ):
         """
@@ -479,8 +478,8 @@ class RecognizeURL(commands.Cog):
         interaction: discord.Interaction,
         url: str,
         操作: app_commands.Choice[str],
-        名称: Optional[str] = None,
-        描述: Optional[str] = None
+        名称: str | None = None,
+        描述: str | None = None
     ):
         """编辑URL速查表"""
         # 🔥 黄金法则：永远先 defer！

@@ -7,7 +7,7 @@ import io
 import asyncio
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Any
 from cogs.logger import log_slash_command
 
 
@@ -30,10 +30,10 @@ class Fox14Tagger(commands.Cog):
 
         # ---- 告警功能配置与冷却窗口（内存） ----
         self._alert_enabled: bool = True
-        self._target_channel_id: Optional[int] = None
-        self._alert_channel_id: Optional[int] = None
+        self._target_channel_id: int | None = None
+        self._alert_channel_id: int | None = None
         self._min_interval_minutes: int = 30
-        self._cooldown_until: Dict[Tuple[int, int], int] = {}
+        self._cooldown_until: dict[tuple[int, int], int] = {}
         
         try:
             target_str = os.getenv("TARGET_CHANNEL_OR_THREAD", "").strip()
@@ -61,7 +61,7 @@ class Fox14Tagger(commands.Cog):
             print(f"[tagger] Fox14 标记告警已启用：ALERT={self._alert_channel_id}, MIN_INTERVAL={self._min_interval_minutes}min, TARGET(不参与触发)={self._target_channel_id}")
 
         # 后台任务：每日北京时间0点过期扫描
-        self._expiry_task: Optional[asyncio.Task] = None
+        self._expiry_task: asyncio.Task | None = None
         self._expiry_task = asyncio.create_task(self._expiry_scheduler())
 
     def cog_unload(self):
@@ -89,7 +89,7 @@ class Fox14Tagger(commands.Cog):
         return user_id in admins or user_id in trusted
 
     @staticmethod
-    def _parse_message_link(link: str) -> Optional[Tuple[int, int, int]]:
+    def _parse_message_link(link: str) -> tuple[int, int, int] | None:
         """
         解析 Discord 消息链接 https://discord.com/channels/{guild}/{channel}/{message}
         返回 (guild_id, channel_id, message_id) 或 None
@@ -131,7 +131,7 @@ class Fox14Tagger(commands.Cog):
         return datetime(y, m, d, dt.hour, dt.minute, dt.second, dt.microsecond)
 
     @classmethod
-    def _parse_expire_input(cls, raw: Optional[str]) -> Tuple[bool, str, Optional[int], str]:
+    def _parse_expire_input(cls, raw: str | None) -> tuple[bool, str, int | None, str]:
         """
         解析自动过期输入：
         - 支持 '-1' 表示永久
@@ -243,7 +243,7 @@ class Fox14Tagger(commands.Cog):
         conn.close()
         return rid
 
-    def _fetch_record_by_id(self, record_id: int) -> Optional[Dict[str, Any]]:
+    def _fetch_record_by_id(self, record_id: int) -> dict[str, Any] | None:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute('''
@@ -269,7 +269,7 @@ class Fox14Tagger(commands.Cog):
         conn.close()
         return affected > 0
 
-    def _list_recent_normal_records(self, guild_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+    def _list_recent_normal_records(self, guild_id: int, limit: int = 10) -> list[dict[str, Any]]:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute('''
@@ -286,7 +286,7 @@ class Fox14Tagger(commands.Cog):
                           'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r))
                 for r in rows]
 
-    def _list_user_normal_records(self, guild_id: int, user_id: int) -> List[Dict[str, Any]]:
+    def _list_user_normal_records(self, guild_id: int, user_id: int) -> list[dict[str, Any]]:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute('''
@@ -302,7 +302,7 @@ class Fox14Tagger(commands.Cog):
                           'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r))
                 for r in rows]
 
-    def _list_all_records_of_guild(self, guild_id: int) -> List[Dict[str, Any]]:
+    def _list_all_records_of_guild(self, guild_id: int) -> list[dict[str, Any]]:
         conn = self._get_conn()
         cur = conn.cursor()
         cur.execute('''
@@ -374,7 +374,7 @@ class Fox14Tagger(commands.Cog):
     # ------------- 文本格式化 -------------
 
     @staticmethod
-    def _format_records_as_text(records: List[Dict[str, Any]]) -> str:
+    def _format_records_as_text(records: list[dict[str, Any]]) -> str:
         """
         将记录列表格式化为txt伪表格
         """
@@ -419,11 +419,11 @@ class Fox14Tagger(commands.Cog):
     @app_commands.guild_only()
     async def tag_user(self,
                         interaction: discord.Interaction,
-                        user: Optional[discord.Member],
-                        message_link: Optional[str],
+                        user: discord.Member | None,
+                        message_link: str | None,
                         reason: str,
-                        expire: Optional[str] = None,
-                        scope: Optional[str] = None):
+                        expire: str | None = None,
+                        scope: str | None = None):
         await self.safe_defer(interaction)
 
         # 权限
@@ -449,7 +449,7 @@ class Fox14Tagger(commands.Cog):
             return
         reason = reason.strip()
 
-        target_user: Optional[discord.User] = None
+        target_user: discord.User | None = None
         used_message_link = "未提供"
 
         # 若提供消息链接，解析与抓取消息作者
@@ -546,7 +546,7 @@ class Fox14Tagger(commands.Cog):
         user="要查询的用户（可选；不指定则显示最近10条正常记录）"
     )
     @app_commands.guild_only()
-    async def tag_query(self, interaction: discord.Interaction, user: Optional[discord.Member] = None):
+    async def tag_query(self, interaction: discord.Interaction, user: discord.Member | None = None):
         await self.safe_defer(interaction)
 
         if not self._has_admin_or_trusted(interaction):
@@ -680,7 +680,7 @@ class Fox14Tagger(commands.Cog):
 
 # ---- 辅助方法与事件监听器：被标记用户在目标频道/子区发言时发送告警 ----
 
-    async def _get_alert_destination(self) -> Optional[discord.abc.Messageable]:
+    async def _get_alert_destination(self) -> discord.abc.Messageable | None:
         """
         获取告警目标频道或子区对象（Messageable）。
         """
@@ -694,7 +694,7 @@ class Fox14Tagger(commands.Cog):
                 ch = None
         return ch  # 可能是 TextChannel 或 Thread，均可 send()
 
-    def _get_effective_user_records(self, guild_id: int, user_id: int, now_epoch: int) -> List[Dict[str, Any]]:
+    def _get_effective_user_records(self, guild_id: int, user_id: int, now_epoch: int) -> list[dict[str, Any]]:
         """
         获取用户在当前服务器的有效标记记录：
         - status='正常'
@@ -703,7 +703,7 @@ class Fox14Tagger(commands.Cog):
         """
         records = self._list_user_normal_records(guild_id, user_id)
 
-        def _is_valid(rec: Dict[str, Any]) -> bool:
+        def _is_valid(rec: dict[str, Any]) -> bool:
             try:
                 exp = int(rec.get('expire_at_epoch', -1))
             except Exception:
@@ -950,7 +950,7 @@ class Fox14TagPanelView(discord.ui.View):
         scope_select.callback = _on_scope_change
         self.add_item(scope_select)
 
-    async def _fetch_member(self, guild: Optional[discord.Guild]) -> Optional[discord.Member]:
+    async def _fetch_member(self, guild: discord.Guild | None) -> discord.Member | None:
         """尝试从缓存或远端获取成员对象"""
         if guild is None:
             return None
@@ -962,7 +962,7 @@ class Fox14TagPanelView(discord.ui.View):
         except Exception:
             return None
 
-    async def build_embed(self, guild: Optional[discord.Guild]) -> discord.Embed:
+    async def build_embed(self, guild: discord.Guild | None) -> discord.Embed:
         """构建面板 Embed（不显示头像）"""
         embed = discord.Embed(
             title="Fox14 标记面板",
@@ -985,7 +985,7 @@ class Fox14TagPanelView(discord.ui.View):
         embed.add_field(name="加入时间", value=joined_disp, inline=False)
 
         # 最近3条“正常”记录
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         if guild is not None:
             try:
                 records = self.cog._list_user_normal_records(guild.id, self.target_user.id)[:3]

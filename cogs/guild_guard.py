@@ -1,5 +1,4 @@
 import os
-from typing import List, Optional, Set, Tuple
 
 import discord
 from discord import app_commands
@@ -15,7 +14,7 @@ class LeaveUnexpectedGuildsView(discord.ui.View):
         super().__init__(timeout=120)
         self.cog = cog
         self.requester_id = requester_id
-        self.message: Optional[discord.Message] = None
+        self.message: discord.Message | None = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """仅允许命令发起人操作按钮"""
@@ -89,7 +88,7 @@ class LeaveUnexpectedGuildsView(discord.ui.View):
             f"- 执行后连接数: {after_count}",
         ]
 
-        failed_samples: List[str] = result.get("failed_samples", [])
+        failed_samples: list[str] = result.get("failed_samples", [])
         if failed_samples:
             lines.append(f"- 失败示例: {', '.join(failed_samples)}")
 
@@ -113,14 +112,14 @@ class GuildGuardCog(commands.Cog):
         admins = getattr(self.bot, "admins", [])
         return user_id in admins
 
-    def _parse_should_guild_ids(self) -> Tuple[Set[int], List[str]]:
+    def _parse_should_guild_ids(self) -> tuple[set[int], list[str]]:
         """从环境变量解析应在的服务器ID列表"""
         raw = os.getenv("BOT_SHOULD_IN_GUILD_IDS", "").strip()
         if not raw:
             return set(), []
 
-        should_ids: Set[int] = set()
-        invalid_items: List[str] = []
+        should_ids: set[int] = set()
+        invalid_items: list[str] = []
 
         for part in raw.split(","):
             token = part.strip()
@@ -133,14 +132,14 @@ class GuildGuardCog(commands.Cog):
 
         return should_ids, invalid_items
 
-    def _get_unexpected_guilds(self, should_ids: Set[int]) -> List[discord.Guild]:
+    def _get_unexpected_guilds(self, should_ids: set[int]) -> list[discord.Guild]:
         return [guild for guild in self.bot.guilds if guild.id not in should_ids]
 
-    def _format_guild_preview(self, guilds: List[discord.Guild], max_items: int = 20, max_chars: int = 900) -> str:
+    def _format_guild_preview(self, guilds: list[discord.Guild], max_items: int = 20, max_chars: int = 900) -> str:
         if not guilds:
             return "（无）"
 
-        lines: List[str] = []
+        lines: list[str] = []
         for guild in guilds:
             line = f"• {guild.name} (`{guild.id}`)"
             if len(lines) >= max_items:
@@ -155,7 +154,7 @@ class GuildGuardCog(commands.Cog):
 
         return "\n".join(lines)
 
-    async def execute_leave_unexpected_guilds(self, current_guild_id: Optional[int] = None) -> dict:
+    async def execute_leave_unexpected_guilds(self, current_guild_id: int | None = None) -> dict:
         should_ids, invalid_items = self._parse_should_guild_ids()
         if not should_ids:
             return {
@@ -170,7 +169,7 @@ class GuildGuardCog(commands.Cog):
 
         success_count = 0
         failed_count = 0
-        failed_samples: List[str] = []
+        failed_samples: list[str] = []
 
         for guild in unexpected_guilds:
             try:

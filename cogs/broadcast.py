@@ -12,7 +12,6 @@ import os
 from datetime import datetime, timedelta
 import pytz
 import logging
-from typing import Dict, Tuple, Optional
 import traceback
 
 # 设置日志
@@ -24,9 +23,9 @@ class BroadcastCog(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
-        self.config: Dict[str, Dict] = {}
-        self.stats: Dict[str, Dict] = {}
-        self.active_tasks: Dict[str, tasks.Loop] = {}
+        self.config: dict[str, dict] = {}
+        self.stats: dict[str, dict] = {}
+        self.active_tasks: dict[str, tasks.Loop] = {}
         self.config_path = 'broadcast/broadcast_threads.json'
         self.stats_path = 'broadcast/broadcast_stats.json'
         self.lock = asyncio.Lock()  # 防止并发修改
@@ -67,7 +66,7 @@ class BroadcastCog(commands.Cog):
         """加载任务配置文件"""
         try:
             if os.path.exists(self.config_path):
-                with open(self.config_path, 'r', encoding='utf-8') as f:
+                with open(self.config_path, encoding='utf-8') as f:
                     self.config = json.load(f)
                 logger.info(f"已加载 {len(self.config)} 个广播任务配置")
             else:
@@ -81,7 +80,7 @@ class BroadcastCog(commands.Cog):
         """加载统计数据文件"""
         try:
             if os.path.exists(self.stats_path):
-                with open(self.stats_path, 'r', encoding='utf-8') as f:
+                with open(self.stats_path, encoding='utf-8') as f:
                     self.stats = json.load(f)
                 logger.info("已加载统计数据")
                 
@@ -127,7 +126,7 @@ class BroadcastCog(commands.Cog):
                 except Exception as e:
                     logger.error(f"重置任务 {task_id} 计数失败: {e}")
     
-    def validate_task(self, task_name: str, task_config: Dict) -> Tuple[bool, Optional[str]]:
+    def validate_task(self, task_name: str, task_config: dict) -> tuple[bool, str | None]:
         """
         验证任务配置
         返回: (是否有效, 错误信息)
@@ -204,7 +203,7 @@ class BroadcastCog(commands.Cog):
                     task_config['status'] = 'inactive'
                     self.save_config()
     
-    async def start_task(self, task_name: str, task_config: Dict) -> None:
+    async def start_task(self, task_name: str, task_config: dict) -> None:
         """启动单个任务"""
         try:
             # 如果任务已经在运行，先停止
@@ -225,7 +224,7 @@ class BroadcastCog(commands.Cog):
             logger.error(f"启动任务 {task_name} 失败: {e}")
             logger.error(traceback.format_exc())
     
-    async def create_interval_task(self, task_name: str, task_config: Dict) -> None:
+    async def create_interval_task(self, task_name: str, task_config: dict) -> None:
         """创建间隔模式任务"""
         interval_minutes = int(task_config['INTERVAL_MINUTES'])
         
@@ -265,7 +264,7 @@ class BroadcastCog(commands.Cog):
                 except Exception as e:
                     logger.error(f"解析上次发送时间失败: {e}")
     
-    async def create_daily_task(self, task_name: str, task_config: Dict) -> None:
+    async def create_daily_task(self, task_name: str, task_config: dict) -> None:
         """创建定时模式任务"""
         daily_times = [int(t.strip()) for t in task_config['DAILY_TIMES'].split(',')]
         timezone_str = task_config.get('tz', 'Asia/Shanghai')
@@ -304,7 +303,7 @@ class BroadcastCog(commands.Cog):
         daily_task.start()
         self.active_tasks[task_name] = daily_task
     
-    async def execute_task(self, task_name: str, task_config: Dict) -> None:
+    async def execute_task(self, task_name: str, task_config: dict) -> None:
         """执行广播任务"""
         async with self.lock:
             try:

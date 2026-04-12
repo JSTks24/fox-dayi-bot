@@ -5,7 +5,6 @@ import json
 import sqlite3
 from dotenv import load_dotenv
 from datetime import datetime
-from typing import Optional
 
 # 加载环境变量
 load_dotenv()
@@ -20,7 +19,7 @@ class SyncPunishDataCog(commands.Cog):
         self.interface_bot_id = self._parse_int(os.getenv("QUICK_PUNISH_INTERFACE_BOT_ID"))
         self.init_database()
 
-    def _parse_int(self, s: Optional[str]) -> Optional[int]:
+    def _parse_int(self, s: str | None) -> int | None:
         try:
             if s is None:
                 return None
@@ -197,10 +196,10 @@ class SyncPunishDataCog(commands.Cog):
         user_name: str,
         punish_count: int,
         timestamp: str,
-        original_message_id: Optional[str],
-        original_message_link: Optional[str],
-        channel_id: Optional[str],
-        channel_name: Optional[str],
+        original_message_id: str | None,
+        original_message_link: str | None,
+        channel_id: str | None,
+        channel_name: str | None,
         executor_id: str,
         executor_name: str,
         reason: str,
@@ -208,7 +207,7 @@ class SyncPunishDataCog(commands.Cog):
         removed_roles_by_guild_json: str,
         status: str,
         source_type: str,
-        source_guild_id: Optional[str]
+        source_guild_id: str | None
     ):
         conn = sqlite3.connect('quick_punish.db')
         cursor = conn.cursor()
