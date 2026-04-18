@@ -96,3 +96,7 @@ prompt/*
 
 # exclude naoleiwiki-main workspace copy
 naoleiwiki-main/
+
+.claude/
+.codex/
+refactoring/
