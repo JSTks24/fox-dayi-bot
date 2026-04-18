@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.logger import log_slash_command
+from cogs.utils import log_slash_command, safe_defer as _safe_defer
 
 DEFAULT_BASE_URL = "https://naoleiwiki.pages.dev"
 DEFAULT_LIMIT = 5
@@ -42,16 +42,6 @@ SUBSECTION_LABELS = {
     "gemini-build": "Gemini Build",
     "gemini-cli": "Gemini CLI",
 }
-
-
-async def safe_defer(interaction: discord.Interaction):
-    """
-    一个绝对安全的"占坑"函数。
-    它会检查交互是否已被响应，如果没有，就立即以"仅自己可见"的方式延迟响应，
-    这能完美解决超时和重复响应问题。
-    """
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True)
 
 
 def normalize_base_url(base_url: str) -> str:
@@ -200,7 +190,7 @@ class WikiSearch(commands.Cog):
         关键词: str,
         包含作品: bool = False,
     ):
-        await safe_defer(interaction)
+        await _safe_defer(interaction)
 
         user_id = interaction.user.id
         remaining_cooldown = self.get_remaining_cooldown(user_id)

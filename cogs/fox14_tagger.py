@@ -8,7 +8,7 @@ import asyncio
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
-from cogs.logger import log_slash_command
+from cogs.utils import log_slash_command, safe_defer as _safe_defer
 
 
 DB_DIR = 'tagger'
@@ -70,14 +70,6 @@ class Fox14Tagger(commands.Cog):
             self._expiry_task.cancel()
 
     # ------------- 工具与校验器 -------------
-
-    @staticmethod
-    async def safe_defer(interaction: discord.Interaction):
-        """
-        安全defer：首次响应使用，仅自己可见，统一后续用 followup 或 edit_original_response
-        """
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
 
     def _has_admin_or_trusted(self, interaction: discord.Interaction) -> bool:
         """
@@ -258,7 +250,7 @@ class Fox14Tagger(commands.Cog):
             return None
         keys = ['id', 'status', 'guild_id', 'target_user_id', 'message_link', 'reason',
                 'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id']
-        return dict(zip(keys, row))
+        return dict(zip(keys, row, strict=False))
 
     def _clear_record_by_id(self, record_id: int) -> bool:
         conn = self._get_conn()
@@ -283,7 +275,7 @@ class Fox14Tagger(commands.Cog):
         rows = cur.fetchall()
         conn.close()
         return [dict(zip(['id', 'status', 'guild_id', 'target_user_id', 'message_link', 'reason',
-                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r))
+                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r, strict=False))
                 for r in rows]
 
     def _list_user_normal_records(self, guild_id: int, user_id: int) -> list[dict[str, Any]]:
@@ -299,7 +291,7 @@ class Fox14Tagger(commands.Cog):
         rows = cur.fetchall()
         conn.close()
         return [dict(zip(['id', 'status', 'guild_id', 'target_user_id', 'message_link', 'reason',
-                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r))
+                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r, strict=False))
                 for r in rows]
 
     def _list_all_records_of_guild(self, guild_id: int) -> list[dict[str, Any]]:
@@ -315,7 +307,7 @@ class Fox14Tagger(commands.Cog):
         rows = cur.fetchall()
         conn.close()
         return [dict(zip(['id', 'status', 'guild_id', 'target_user_id', 'message_link', 'reason',
-                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r))
+                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r, strict=False))
                 for r in rows]
 
     def _expiry_scan_once(self) -> int:
@@ -424,7 +416,7 @@ class Fox14Tagger(commands.Cog):
                         reason: str,
                         expire: str | None = None,
                         scope: str | None = None):
-        await self.safe_defer(interaction)
+        await _safe_defer(interaction)
 
         # 权限
         if not self._has_admin_or_trusted(interaction):
@@ -547,7 +539,7 @@ class Fox14Tagger(commands.Cog):
     )
     @app_commands.guild_only()
     async def tag_query(self, interaction: discord.Interaction, user: discord.Member | None = None):
-        await self.safe_defer(interaction)
+        await _safe_defer(interaction)
 
         if not self._has_admin_or_trusted(interaction):
             await interaction.followup.send("❌ 权限不足：仅管理员或受信任用户可用。", ephemeral=True)
@@ -604,7 +596,7 @@ class Fox14Tagger(commands.Cog):
     )
     @app_commands.guild_only()
     async def tag_clear(self, interaction: discord.Interaction, record_id: int):
-        await self.safe_defer(interaction)
+        await _safe_defer(interaction)
 
         if not self._has_admin_or_trusted(interaction):
             await interaction.followup.send("❌ 权限不足：仅管理员或受信任用户可用。", ephemeral=True)
@@ -657,7 +649,7 @@ class Fox14Tagger(commands.Cog):
     @app_commands.command(name="标记-下载", description="导出当前服务器全部标记（正常与已清除）为txt附件")
     @app_commands.guild_only()
     async def tag_download(self, interaction: discord.Interaction):
-        await self.safe_defer(interaction)
+        await _safe_defer(interaction)
 
         if not self._has_admin_or_trusted(interaction):
             await interaction.followup.send("❌ 权限不足：仅管理员或受信任用户可用。", ephemeral=True)
@@ -821,7 +813,7 @@ class Fox14TagModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         # 提交时遵循黄金法则：统一使用 safe_defer，占坑后续用 followup
-        await Fox14Tagger.safe_defer(interaction)
+        await _safe_defer(interaction)
 
         # 权限校验
         if not self.cog._has_admin_or_trusted(interaction):
@@ -888,7 +880,7 @@ class Fox14TagModal(discord.ui.Modal):
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         try:
-            await Fox14Tagger.safe_defer(interaction)
+            await _safe_defer(interaction)
         except Exception:
             pass
         try:
@@ -913,7 +905,7 @@ async def fox14_tag_context(interaction: discord.Interaction, message: discord.M
         return
 
     # 入口遵循黄金法则：先 defer，然后编辑原始临时响应为面板
-    await Fox14Tagger.safe_defer(interaction)
+    await _safe_defer(interaction)
 
     view = Fox14TagPanelView(cog=cog, target_message=message)
     embed = await view.build_embed(interaction.guild)
@@ -940,7 +932,7 @@ class Fox14TagPanelView(discord.ui.View):
             ]
         )
         async def _on_scope_change(interaction: discord.Interaction):
-            await Fox14Tagger.safe_defer(interaction)
+            await _safe_defer(interaction)
             try:
                 self.scope_selection = scope_select.values[0]
             except Exception:
@@ -1023,7 +1015,7 @@ class Fox14TagPanelView(discord.ui.View):
 
     async def _do_quick_tag(self, interaction: discord.Interaction, reason_text: str):
         """三个快捷按钮的统一处理：先 defer，再写库，最后刷新面板并禁用按钮"""
-        await Fox14Tagger.safe_defer(interaction)
+        await _safe_defer(interaction)
 
         # 权限与一致性校验
         if not self.cog._has_admin_or_trusted(interaction):

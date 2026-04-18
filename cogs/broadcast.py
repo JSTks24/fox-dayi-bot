@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import pytz
 import logging
 import traceback
+from cogs.utils import check_admin
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -532,7 +533,7 @@ class BroadcastCog(commands.Cog):
     async def broadcast_panel(self, interaction: discord.Interaction):
         """显示广播控制面板"""
         # 检查管理员权限
-        if not self.is_admin(interaction):
+        if not check_admin(interaction):
             await interaction.response.send_message('❌ 此命令仅限管理员使用。', ephemeral=True)
             return
         
@@ -553,18 +554,6 @@ class BroadcastCog(commands.Cog):
         except Exception as e:
             logger.error(f"创建广播控制面板失败: {e}")
             await interaction.followup.send(f'❌ 创建控制面板失败: {str(e)}', ephemeral=True)
-    
-    def is_admin(self, interaction: discord.Interaction) -> bool:
-        """检查用户是否为管理员"""
-        # 检查是否有管理员权限或是否在bot管理员列表中
-        if hasattr(self.bot, 'admins'):
-            return interaction.user.id in self.bot.admins
-        # 备用：检查Discord权限
-        if interaction.guild:
-            member = interaction.guild.get_member(interaction.user.id)
-            if member:
-                return member.guild_permissions.administrator
-        return False
     
     async def create_panel_embed(self, interaction: discord.Interaction) -> discord.Embed:
         """创建控制面板的embed消息"""

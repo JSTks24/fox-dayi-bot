@@ -12,12 +12,9 @@ import os
 from datetime import datetime, timedelta
 import logging
 import traceback
-import base64
-import mimetypes
-from PIL import Image
-import io
 import tiktoken
 import time
+from cogs.utils import compress_image, encode_image_to_base64, get_file_size_kb
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -183,125 +180,6 @@ class MentionCog(commands.Cog):
             logger.info(f"已清理 {log_save_days} 天前的统计数据")
         except Exception as e:
             logger.error(f"清理统计数据失败: {e}")
-    
-    # ===== 图片处理辅助方法 =====
-    
-    def _get_file_size_kb(self, file_path: str) -> float:
-        """
-        获取文件大小（KB）
-        
-        Args:
-            file_path: 文件路径
-            
-        Returns:
-            文件大小（KB）
-        """
-        if os.path.exists(file_path):
-            return os.path.getsize(file_path) / 1024
-        return 0
-    
-    async def _compress_image(self, image_path: str, max_size_kb: int = 250) -> str:
-        """
-        压缩图片到指定大小以下
-        
-        Args:
-            image_path: 原始图片路径
-            max_size_kb: 最大文件大小（KB），默认250KB
-            
-        Returns:
-            压缩后的图片路径（如果需要压缩）或原始路径
-        """
-        try:
-            # 检查原始文件大小
-            original_size_kb = self._get_file_size_kb(image_path)
-            logger.info(f"🖼️ 原始图片大小: {original_size_kb:.2f}KB")
-            
-            # 如果小于限制，直接返回
-            if original_size_kb <= max_size_kb:
-                logger.info("✅ 图片大小符合要求，无需压缩")
-                return image_path
-            
-            # 需要压缩
-            logger.info(f"🔧 开始压缩图片 (目标: <{max_size_kb}KB)")
-            
-            # 打开图片
-            with Image.open(image_path) as img:
-                # 转换为RGB（如果是RGBA或其他格式）
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    # 创建白色背景
-                    background = Image.new('RGB', img.size, (255, 255, 255))
-                    if img.mode == 'RGBA' or img.mode == 'LA':
-                        background.paste(img, mask=img.split()[-1])
-                    else:
-                        background.paste(img)
-                    img = background
-                elif img.mode != 'RGB':
-                    img = img.convert('RGB')
-                
-                # 生成压缩后的文件路径
-                base_name = os.path.splitext(image_path)[0]
-                compressed_path = f"{base_name}_compressed.jpg"
-                
-                # 初始参数
-                quality = 85
-                max_dimension = 1920
-                
-                # 循环压缩直到满足大小要求
-                for attempt in range(5):  # 最多尝试5次
-                    # 调整尺寸
-                    width, height = img.size
-                    if width > max_dimension or height > max_dimension:
-                        ratio = min(max_dimension / width, max_dimension / height)
-                        new_width = int(width * ratio)
-                        new_height = int(height * ratio)
-                        resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                        logger.debug(f"  调整尺寸: {width}x{height} → {new_width}x{new_height}")
-                    else:
-                        resized_img = img
-                    
-                    # 保存到内存缓冲区以检查大小
-                    buffer = io.BytesIO()
-                    resized_img.save(buffer, format='JPEG', quality=quality, optimize=True)
-                    buffer_size_kb = buffer.tell() / 1024
-                    
-                    logger.debug(f"  尝试 {attempt + 1}: 质量={quality}, 大小={buffer_size_kb:.2f}KB")
-                    
-                    # 如果满足要求，保存到文件
-                    if buffer_size_kb <= max_size_kb:
-                        buffer.seek(0)
-                        with open(compressed_path, 'wb') as f:
-                            f.write(buffer.read())
-                        logger.info(f"✅ 压缩成功: {original_size_kb:.2f}KB → {buffer_size_kb:.2f}KB")
-                        logger.info(f"   压缩率: {(1 - buffer_size_kb/original_size_kb) * 100:.1f}%")
-                        return compressed_path
-                    
-                    # 调整参数继续尝试
-                    if attempt < 2:
-                        quality -= 10  # 降低质量
-                    else:
-                        max_dimension = int(max_dimension * 0.8)  # 缩小尺寸
-                        quality = 75  # 重置质量
-                
-                # 如果仍然无法满足要求，使用最后的尝试结果
-                logger.warning(f"⚠️ 无法压缩到{max_size_kb}KB以下，使用最佳尝试结果")
-                buffer.seek(0)
-                with open(compressed_path, 'wb') as f:
-                    f.write(buffer.read())
-                return compressed_path
-                
-        except Exception as e:
-            logger.error(f"❌ 图片压缩失败: {e}")
-            # 压缩失败时返回原始路径
-            return image_path
-    
-    def _encode_image_to_base64(self, image_path: str) -> str:
-        """将图片文件编码为Base64数据URI。"""
-        mime_type, _ = mimetypes.guess_type(image_path)
-        if mime_type is None:
-            mime_type = "application/octet-stream"
-        with open(image_path, "rb") as image_file:
-            base64_encoded_data = base64.b64encode(image_file.read()).decode('utf-8')
-        return f"data:{mime_type};base64,{base64_encoded_data}"
     
     # ===== 权限检查 =====
     
@@ -636,7 +514,7 @@ class MentionCog(commands.Cog):
             logger.error(traceback.format_exc())
             try:
                 await message.reply("❌ 处理你的请求时发生错误，请稍后再试。")
-            except:
+            except Exception:
                 pass
     
     async def check_preset_reply(self, message: discord.Message, thread_id: str) -> str | None:
@@ -688,7 +566,7 @@ class MentionCog(commands.Cog):
             if image_paths:
                 logger.info(f"📸 检测到 {len(image_paths)} 张图片，开始压缩...")
                 for img_path in image_paths:
-                    compressed_path = await self._compress_image(img_path)
+                    compressed_path = await compress_image(img_path)
                     compressed_image_paths.append(compressed_path)
                     if compressed_path != img_path:
                         temp_files.append(compressed_path)  # 记录压缩后的图片路径
@@ -708,9 +586,9 @@ class MentionCog(commands.Cog):
                 # 有图片：构建多模态消息
                 user_content = [{"type": "text", "text": user_message_content}]
                 for img_path in compressed_image_paths:
-                    size_kb = self._get_file_size_kb(img_path)
+                    size_kb = get_file_size_kb(img_path)
                     logger.info(f"📎 添加图片到API请求: {os.path.basename(img_path)} ({size_kb:.2f}KB)")
-                    base64_image = self._encode_image_to_base64(img_path)
+                    base64_image = encode_image_to_base64(img_path)
                     user_content.append({
                         "type": "image_url",
                         "image_url": {"url": base64_image}
@@ -853,7 +731,7 @@ class MentionCog(commands.Cog):
             logger.error(traceback.format_exc())
             try:
                 await processing_msg.edit(content=f"❌ 生成失败: {str(e)}")
-            except:
+            except Exception:
                 pass
         finally:
             # 清理临时文件
@@ -1114,7 +992,7 @@ class MentionCog(commands.Cog):
                 try:
                     owner = await self.bot.fetch_user(int(owner_id))
                     owner_name = owner.display_name if owner else "未知用户"
-                except:
+                except Exception:
                     owner_name = f"用户ID:{owner_id}"
             else:
                 owner_name = "未设置"

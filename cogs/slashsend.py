@@ -2,15 +2,11 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import re
-from cogs.logger import log_slash_command
+from cogs.utils import check_admin, log_slash_command, safe_defer as _safe_defer
 
 class SlashSend(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-
-    def is_admin(self, interaction: discord.Interaction) -> bool:
-        """检查用户是否为管理员"""
-        return interaction.user.id in self.bot.admins
 
     def parse_message_link(self, message_link: str) -> tuple:
         """
@@ -34,10 +30,10 @@ class SlashSend(commands.Cog):
         仅限管理员使用
         """
         # 先延迟响应，避免超时与“使用了 /send”横幅
-        await self.safe_defer(interaction)
+        await _safe_defer(interaction)
 
         # 检查管理员权限
-        if not self.is_admin(interaction):
+        if not check_admin(interaction):
             await interaction.followup.send('❌ 此命令仅限管理员使用。', ephemeral=True)
             log_slash_command(interaction, False)
             return
@@ -128,14 +124,6 @@ class SlashSend(commands.Cog):
             await interaction.followup.send('❌ 执行命令时发生未知错误。', ephemeral=True)
             log_slash_command(interaction, False)
 
-    async def safe_defer(self, interaction: discord.Interaction):
-        """
-        安全的延迟响应函数
-        检查交互是否已被响应，如果没有，就立即以"仅自己可见"的方式延迟响应
-        """
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-
     @app_commands.command(name='hzhv', description='[仅管理员] 删除机器人消息')
     @app_commands.describe(
         message_link='（可选）要删除的消息链接，留空则删除机器人在当前频道的最后一条消息'
@@ -146,10 +134,10 @@ class SlashSend(commands.Cog):
         仅限管理员使用
         """
         # 先延迟响应，避免超时
-        await self.safe_defer(interaction)
+        await _safe_defer(interaction)
         
         # 检查管理员权限
-        if not self.is_admin(interaction):
+        if not check_admin(interaction):
             await interaction.followup.send('❌ 此命令仅限管理员使用。', ephemeral=True)
             log_slash_command(interaction, False)
             return

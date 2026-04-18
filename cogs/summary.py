@@ -5,17 +5,7 @@ import os
 import openai
 import asyncio
 import re
-
-# --- 安全的 defer 函数 ---
-async def safe_defer(interaction: discord.Interaction):
-    """
-    一个绝对安全的"占坑"函数。
-    它会检查交互是否已被响应，如果没有，就立即以"仅自己可见"的方式延迟响应，
-    这能完美解决超时和重复响应问题。
-    """
-    if not interaction.response.is_done():
-        # ephemeral=True 让这个"占坑"行为对其他人不可见，不刷屏。
-        await interaction.response.defer(ephemeral=True)
+from cogs.utils import safe_defer as _safe_defer
 
 TEMPLATE_CONFIG: dict[str, dict[str, str]] = {
     "judge": {
@@ -297,7 +287,7 @@ class Summary(commands.Cog):
         AI快速总结并评判功能的斜杠命令
         """
         # 🔥 黄金法则：永远先 defer！
-        await safe_defer(interaction)
+        await _safe_defer(interaction)
         
         # 权限检查
         user_id = interaction.user.id

@@ -5,50 +5,15 @@ import os
 from datetime import datetime
 import asyncio
 import logging
+from cogs.utils import check_admin, log_slash_command, safe_defer as _safe_defer
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 安全defer函数
-async def safe_defer(interaction: discord.Interaction):
-    """
-    一个绝对安全的"占坑"函数。
-    它会检查交互是否已被响应，如果没有，就立即以"仅自己可见"的方式延迟响应，
-    这能完美解决超时和重复响应问题。
-    """
-    if not interaction.response.is_done():
-        # ephemeral=True 让这个"占坑"行为对其他人不可见，不刷屏。
-        await interaction.response.defer(ephemeral=True)
-
 class GetContextCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-    
-    def _is_admin_or_kn_owner(self, user_id: int) -> tuple[bool, str]:
-        """
-        检查用户是否为admin或kn_owner
-        返回: (是否有权限, 用户类型)
-        """
-        if hasattr(self.bot, 'admins') and user_id in self.bot.admins:
-            return True, 'admin'
-        if hasattr(self.bot, 'kn_owner') and user_id in self.bot.kn_owner:
-            return True, 'kn_owner'
-        return False, 'none'
-    
-    async def _get_thread_owner(self, thread: discord.Thread) -> int:
-        """
-        获取子区（线程）的创建者ID
-        """
-        try:
-            # 获取线程的第一条消息（创建消息）
-            async for message in thread.history(limit=1, oldest_first=True):
-                return message.author.id
-            # 如果没有消息，返回线程的owner_id
-            return thread.owner_id if thread.owner_id else 0
-        except Exception as e:
-            logger.error(f"获取线程所有者失败: {e}")
-            return 0
     
     def _parse_user_ids(self, user_ids_str: str) -> list[int]:
         """
@@ -198,7 +163,7 @@ class GetContextCog(commands.Cog):
         except Exception as e:
             logger.error(f"清理临时文件失败: {e}")
     
-    @app_commands.command(name='获取子区内容', description='[管理员/KN所有者] 获取子区内的所有消息内容')
+    @app_commands.command(name='获取子区内容', description='[仅管理员] 获取子区内的所有消息内容')
     @app_commands.describe(
         whitelist='可选：白名单用户ID列表，多个ID用英文逗号分隔（仅获取这些用户的消息）',
         blacklist='可选：黑名单用户ID列表，多个ID用英文逗号分隔（排除这些用户的消息）'
@@ -207,16 +172,16 @@ class GetContextCog(commands.Cog):
                          whitelist: str = None, blacklist: str = None):
         """获取子区内容的斜杠命令"""
         # 永远先defer
-        await safe_defer(interaction)
+        await _safe_defer(interaction)
         
         try:
             # 检查权限
-            has_permission, user_type = self._is_admin_or_kn_owner(interaction.user.id)
-            if not has_permission:
+            if not check_admin(interaction):
                 await interaction.followup.send(
-                    "❌ 权限不足！此命令仅限管理员和KN所有者使用。",
+                    "❌ 权限不足！此命令仅限管理员使用。",
                     ephemeral=True
                 )
+                log_slash_command(interaction, False)
                 return
             
             # 检查是否在线程中
@@ -225,19 +190,10 @@ class GetContextCog(commands.Cog):
                     "❌ 此命令只能在子区（线程）中使用！",
                     ephemeral=True
                 )
+                log_slash_command(interaction, False)
                 return
-            
+
             thread = interaction.channel
-            
-            # 如果是kn_owner，需要验证是否为该子区的所有者
-            if user_type == 'kn_owner':
-                thread_owner_id = await self._get_thread_owner(thread)
-                if thread_owner_id != interaction.user.id:
-                    await interaction.followup.send(
-                        "❌ 权限不足！KN所有者只能获取自己创建的子区内容。",
-                        ephemeral=True
-                    )
-                    return
             
             # 解析和验证白名单和黑名单
             try:
@@ -252,6 +208,7 @@ class GetContextCog(commands.Cog):
                     f"❌ 参数错误：{str(e)}",
                     ephemeral=True
                 )
+                log_slash_command(interaction, False)
                 return
             
             # 构建过滤信息
@@ -277,6 +234,7 @@ class GetContextCog(commands.Cog):
                     "ℹ️ 该子区中没有找到任何文字消息。",
                     ephemeral=True
                 )
+                log_slash_command(interaction, True)
                 return
             
             # 创建临时文件
@@ -297,6 +255,7 @@ class GetContextCog(commands.Cog):
                     file=file,
                     ephemeral=True
                 )
+                log_slash_command(interaction, True)
             
             # 异步清理文件
             asyncio.create_task(self._cleanup_file(filepath))
@@ -306,17 +265,20 @@ class GetContextCog(commands.Cog):
                 "❌ 权限错误：无法访问该子区的消息历史。",
                 ephemeral=True
             )
+            log_slash_command(interaction, False)
         except discord.HTTPException as e:
             await interaction.followup.send(
                 f"❌ Discord API错误：{str(e)}",
                 ephemeral=True
             )
+            log_slash_command(interaction, False)
         except Exception as e:
             logger.error(f"获取子区内容时发生错误: {e}")
             await interaction.followup.send(
                 "❌ 处理过程中发生错误，请稍后重试。",
                 ephemeral=True
             )
+            log_slash_command(interaction, False)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(GetContextCog(bot))

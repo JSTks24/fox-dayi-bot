@@ -11,8 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.logger import log_slash_command
-from cogs.users_db import is_admin
+from cogs.utils import check_admin, log_slash_command
 
 
 class RoleSyncSkipError(RuntimeError):
@@ -330,7 +329,7 @@ class RoleSyncCog(commands.Cog):
         max_interval="指数退避上限（分钟），默认 360",
     )
     @app_commands.guild_only()
-    @app_commands.check(is_admin)
+    @app_commands.check(check_admin)
     async def setup_rolesync(
         self,
         interaction: discord.Interaction,
@@ -433,7 +432,7 @@ class RoleSyncCog(commands.Cog):
     )
     @app_commands.describe(reset_backoff="是否将当前退避间隔重置为基础间隔")
     @app_commands.guild_only()
-    @app_commands.check(is_admin)
+    @app_commands.check(check_admin)
     async def rolesync(
         self,
         interaction: discord.Interaction,

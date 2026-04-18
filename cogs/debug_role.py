@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from typing import Literal
-from cogs.logger import log_slash_command
+from cogs.utils import check_admin, log_slash_command, safe_defer as _safe_defer
 
 
 class DebugRole(commands.Cog):
@@ -10,11 +10,6 @@ class DebugRole(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
-
-    async def safe_defer(self, interaction: discord.Interaction):
-        """安全的defer函数，避免重复响应"""
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
 
     @app_commands.command(name='调试身份组', description='[仅管理员] 为指定用户添加或删除身份组')
     @app_commands.describe(
@@ -32,11 +27,11 @@ class DebugRole(commands.Cog):
         """为指定用户添加或删除身份组"""
         
         # 立即defer响应
-        await self.safe_defer(interaction)
+        await _safe_defer(interaction)
         
         try:
             # 检查是否为管理员
-            if not self.bot.is_admin(interaction):
+            if not check_admin(interaction):
                 await interaction.followup.send(
                     '❌ 您没有权限使用此命令。只有管理员可以使用此功能。',
                     ephemeral=True

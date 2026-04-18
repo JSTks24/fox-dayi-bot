@@ -1,7 +1,5 @@
 import asyncio
-import base64
 import contextlib
-import io
 import json
 import mimetypes
 import os
@@ -15,9 +13,10 @@ from typing import Any
 
 import discord
 import openai
-from PIL import Image
 from discord import app_commands
 from discord.ext import commands
+
+from cogs.utils import safe_defer, encode_image_to_base64, compress_image, get_file_size_kb
 
 # --- 从 bot.py 引入的辅助函数和类 ---
 
@@ -43,36 +42,8 @@ QD_AUXILIARY_LINE_REGEX = re.compile(r"^\s*-# <\|qd-(?:footer|meta)\|>.*?<\|/qd-
 QD_HEADER_REGEX = re.compile(r"^🦊 AI 回复(?:（续 \d+）)?\n\n")
 
 
-class QuotaError(app_commands.AppCommandError):
-    """自定义异常，用于表示用户配额不足"""
-
-
-class ParallelLimitError(app_commands.AppCommandError):
-    """自定义异常，用于表示并发达到上限"""
-
-
 class EmptyAIResponseError(RuntimeError):
     """AI 没有返回可用文本内容。"""
-
-
-def encode_image_to_base64(image_path: str) -> str:
-    """将图片文件编码为 Base64 数据 URI。"""
-    mime_type, _ = mimetypes.guess_type(image_path)
-    if mime_type is None:
-        mime_type = "application/octet-stream"
-    with open(image_path, "rb") as image_file:
-        base64_encoded_data = base64.b64encode(image_file.read()).decode("utf-8")
-    return f"data:{mime_type};base64,{base64_encoded_data}"
-
-
-async def safe_defer(interaction: discord.Interaction):
-    """
-    一个绝对安全的“占坑”函数。
-    它会检查交互是否已被响应，如果没有，就立即以“仅自己可见”的方式延迟响应，
-    这能解决超时和重复响应问题。
-    """
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True)
 
 
 def build_qd_auxiliary_line(marker_name: str, content: str) -> str:
@@ -374,88 +345,11 @@ class AppDayi(commands.Cog):
         """Cog 卸载时移除命令"""
         self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
 
-    def _get_file_size_kb(self, file_path: str) -> float:
-        """获取文件大小（KB）。"""
-        if os.path.exists(file_path):
-            return os.path.getsize(file_path) / 1024
-        return 0
-
     def _is_image_attachment(self, attachment: discord.Attachment) -> bool:
         if attachment.content_type and attachment.content_type.startswith("image/"):
             return True
         guessed_type, _ = mimetypes.guess_type(attachment.filename)
         return bool(guessed_type and guessed_type.startswith("image/"))
-
-    async def _compress_image(self, image_path: str, max_size_kb: int = 250) -> str:
-        """压缩图片到指定大小以下。"""
-        try:
-            original_size_kb = self._get_file_size_kb(image_path)
-            print(f"🖼️ 原始图片大小: {original_size_kb:.2f}KB")
-
-            if original_size_kb <= max_size_kb:
-                print("✅ 图片大小符合要求，无需压缩")
-                return image_path
-
-            print(f"🔧 开始压缩图片 (目标: <{max_size_kb}KB)")
-
-            with Image.open(image_path) as img:
-                if img.mode in ("RGBA", "LA", "P"):
-                    background = Image.new("RGB", img.size, (255, 255, 255))
-                    if img.mode in ("RGBA", "LA"):
-                        background.paste(img, mask=img.split()[-1])
-                    else:
-                        background.paste(img)
-                    img = background
-                elif img.mode != "RGB":
-                    img = img.convert("RGB")
-
-                base_name = os.path.splitext(image_path)[0]
-                compressed_path = f"{base_name}_compressed.jpg"
-
-                quality = 85
-                max_dimension = 1920
-                buffer = io.BytesIO()
-
-                for attempt in range(5):
-                    width, height = img.size
-                    if width > max_dimension or height > max_dimension:
-                        ratio = min(max_dimension / width, max_dimension / height)
-                        new_width = int(width * ratio)
-                        new_height = int(height * ratio)
-                        resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                        print(f"  调整尺寸: {width}x{height} → {new_width}x{new_height}")
-                    else:
-                        resized_img = img
-
-                    buffer = io.BytesIO()
-                    resized_img.save(buffer, format="JPEG", quality=quality, optimize=True)
-                    buffer_size_kb = buffer.tell() / 1024
-
-                    print(f"  尝试 {attempt + 1}: 质量={quality}, 大小={buffer_size_kb:.2f}KB")
-
-                    if buffer_size_kb <= max_size_kb:
-                        buffer.seek(0)
-                        with open(compressed_path, "wb") as f:
-                            f.write(buffer.read())
-                        print(f"✅ 压缩成功: {original_size_kb:.2f}KB → {buffer_size_kb:.2f}KB")
-                        print(f"   压缩率: {(1 - buffer_size_kb / original_size_kb) * 100:.1f}%")
-                        return compressed_path
-
-                    if attempt < 2:
-                        quality -= 10
-                    else:
-                        max_dimension = int(max_dimension * 0.8)
-                        quality = 75
-
-                print(f"⚠️ 无法压缩到{max_size_kb}KB以下，使用最佳尝试结果")
-                buffer.seek(0)
-                with open(compressed_path, "wb") as f:
-                    f.write(buffer.read())
-                return compressed_path
-
-        except Exception as e:
-            print(f"❌ 图片压缩失败: {e}")
-            return image_path
 
     def _clean_expired_cooldowns(self) -> None:
         """清理过期的冷却记录。"""
@@ -872,7 +766,7 @@ class AppDayi(commands.Cog):
                     await attachment.save(image_path)
                     temp_files.add(image_path)
 
-                    final_path = await self._compress_image(image_path)
+                    final_path = await compress_image(image_path)
                     temp_files.add(final_path)
                     image_paths.append(final_path)
                 except Exception as e:
@@ -899,7 +793,7 @@ class AppDayi(commands.Cog):
             user_content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
 
             for image_path in turn.get("image_paths", []):
-                size_kb = self._get_file_size_kb(image_path)
+                size_kb = get_file_size_kb(image_path)
                 total_size_kb += size_kb
                 print(f"📎 添加图片到 API 请求: turn={turn_index} {os.path.basename(image_path)} ({size_kb:.2f}KB)")
                 base64_image = encode_image_to_base64(image_path)
@@ -1194,7 +1088,7 @@ class AppDayi(commands.Cog):
             print(f"   - 上下文消息数: {len(conversation_turns)}")
             print(f"   - 图片数量: {len(total_image_paths)} 张")
             if total_image_paths:
-                print(f"   - 图片总大小: {sum(self._get_file_size_kb(path) for path in total_image_paths):.2f} KB")
+                print(f"   - 图片总大小: {sum(get_file_size_kb(path) for path in total_image_paths):.2f} KB")
 
             await public_session.set_status(STATUS_REQUESTING_AI)
             ai_response = await asyncio.wait_for(

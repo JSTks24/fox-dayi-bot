@@ -5,31 +5,8 @@ import os
 import asyncio
 import json
 from datetime import datetime
-from PIL import Image
-import io
 import time
-
-# --- 从 appdayi.py 引入的辅助函数 ---
-
-async def safe_defer(interaction: discord.Interaction):
-    """
-    一个绝对安全的"占坑"函数。
-    它会检查交互是否已被响应，如果没有，就立即以"仅自己可见"的方式延迟响应，
-    这能完美解决超时和重复响应问题。
-    """
-    if not interaction.response.is_done():
-        await interaction.response.defer(ephemeral=True)
-
-def encode_image_to_base64(image_path):
-    """将图片文件编码为Base64数据URI。"""
-    import mimetypes
-    import base64
-    mime_type, _ = mimetypes.guess_type(image_path)
-    if mime_type is None:
-        mime_type = "application/octet-stream"
-    with open(image_path, "rb") as image_file:
-        base64_encoded_data = base64.b64encode(image_file.read()).decode('utf-8')
-    return f"data:{mime_type};base64,{base64_encoded_data}"
+from cogs.utils import safe_defer, encode_image_to_base64, compress_image
 
 # --- Cog 主体 ---
 
@@ -54,106 +31,6 @@ class RecognizeURL(commands.Cog):
     def _check_permission(self, user_id: int) -> bool:
         """检查用户是否有权限使用此功能"""
         return user_id in self.bot.admins or user_id in self.bot.trusted_users
-    
-    def _get_file_size_kb(self, file_path: str) -> float:
-        """获取文件大小（KB）"""
-        if os.path.exists(file_path):
-            return os.path.getsize(file_path) / 1024
-        return 0
-    
-    async def _compress_image(self, image_path: str, max_size_kb: int = 250) -> str:
-        """
-        压缩图片到指定大小以下
-        
-        Args:
-            image_path: 原始图片路径
-            max_size_kb: 最大文件大小（KB），默认250KB
-            
-        Returns:
-            压缩后的图片路径（如果需要压缩）或原始路径
-        """
-        try:
-            # 检查原始文件大小
-            original_size_kb = self._get_file_size_kb(image_path)
-            print(f"🖼️ 原始图片大小: {original_size_kb:.2f}KB")
-            
-            # 如果小于限制，直接返回
-            if original_size_kb <= max_size_kb:
-                print("✅ 图片大小符合要求，无需压缩")
-                return image_path
-            
-            # 需要压缩
-            print(f"🔧 开始压缩图片 (目标: <{max_size_kb}KB)")
-            
-            # 打开图片
-            with Image.open(image_path) as img:
-                # 转换为RGB（如果是RGBA或其他格式）
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    # 创建白色背景
-                    background = Image.new('RGB', img.size, (255, 255, 255))
-                    if img.mode == 'RGBA' or img.mode == 'LA':
-                        background.paste(img, mask=img.split()[-1])
-                    else:
-                        background.paste(img)
-                    img = background
-                elif img.mode != 'RGB':
-                    img = img.convert('RGB')
-                
-                # 生成压缩后的文件路径
-                base_name = os.path.splitext(image_path)[0]
-                compressed_path = f"{base_name}_compressed.jpg"
-                
-                # 初始参数
-                quality = 85
-                max_dimension = 1920
-                
-                # 循环压缩直到满足大小要求
-                for attempt in range(5):  # 最多尝试5次
-                    # 调整尺寸
-                    width, height = img.size
-                    if width > max_dimension or height > max_dimension:
-                        ratio = min(max_dimension / width, max_dimension / height)
-                        new_width = int(width * ratio)
-                        new_height = int(height * ratio)
-                        resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                        print(f"  调整尺寸: {width}x{height} → {new_width}x{new_height}")
-                    else:
-                        resized_img = img
-                    
-                    # 保存到内存缓冲区以检查大小
-                    buffer = io.BytesIO()
-                    resized_img.save(buffer, format='JPEG', quality=quality, optimize=True)
-                    buffer_size_kb = buffer.tell() / 1024
-                    
-                    print(f"  尝试 {attempt + 1}: 质量={quality}, 大小={buffer_size_kb:.2f}KB")
-                    
-                    # 如果满足要求，保存到文件
-                    if buffer_size_kb <= max_size_kb:
-                        buffer.seek(0)
-                        with open(compressed_path, 'wb') as f:
-                            f.write(buffer.read())
-                        print(f"✅ 压缩成功: {original_size_kb:.2f}KB → {buffer_size_kb:.2f}KB")
-                        print(f"   压缩率: {(1 - buffer_size_kb/original_size_kb) * 100:.1f}%")
-                        return compressed_path
-                    
-                    # 调整参数继续尝试
-                    if attempt < 2:
-                        quality -= 10  # 降低质量
-                    else:
-                        max_dimension = int(max_dimension * 0.8)  # 缩小尺寸
-                        quality = 75  # 重置质量
-                
-                # 如果仍然无法满足要求，使用最后的尝试结果
-                print(f"⚠️ 无法压缩到{max_size_kb}KB以下，使用最佳尝试结果")
-                buffer.seek(0)
-                with open(compressed_path, 'wb') as f:
-                    f.write(buffer.read())
-                return compressed_path
-                
-        except Exception as e:
-            print(f"❌ 图片压缩失败: {e}")
-            # 压缩失败时返回原始路径
-            return image_path
     
     def _load_json(self, file_path: str) -> dict:
         """加载JSON文件"""
@@ -367,7 +244,7 @@ class RecognizeURL(commands.Cog):
             print(f"📸 保存图片: {image_path}")
             
             # 压缩图片
-            compressed_path = await self._compress_image(image_path)
+            compressed_path = await compress_image(image_path)
             
             # 构建提示词
             system_prompt = self._build_prompt()

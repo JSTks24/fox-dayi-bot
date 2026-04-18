@@ -11,6 +11,8 @@ import aiofiles
 from dotenv import load_dotenv
 import io
 
+from cogs.utils import safe_defer
+
 # 加载环境变量
 load_dotenv()
 
@@ -34,15 +36,10 @@ class QuickPunishModal(discord.ui.Modal):
     
     # 已移除用户名/ID二次确认输入框及校验机制
     
-    async def safe_defer(self, interaction: discord.Interaction):
-        """安全的defer响应"""
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-    
     async def on_submit(self, interaction: discord.Interaction):
         """处理表单提交"""
         # 立即defer以避免超时
-        await self.safe_defer(interaction)
+        await safe_defer(interaction)
 
         # 获取处罚原因
         reason = self.reason.value.strip() or "付费违规第三方"
@@ -81,12 +78,12 @@ class QuickPunishModal(discord.ui.Modal):
         """处理错误"""
         print(f"QuickPunishModal错误: {error}")
         try:
-            await self.safe_defer(interaction)
+            await safe_defer(interaction)
             await interaction.followup.send(
                 f"❌ 发生错误：{str(error)}", 
                 ephemeral=True
             )
-        except:
+        except Exception:
             pass
 
 
@@ -112,24 +109,19 @@ class RemoteQuickPunishModal(discord.ui.Modal):
         ))
 
         self.template_select = discord.ui.Select(
-            placeholder="选择私信模板（不选则默认第三方API）",
-            min_values=0,
+            placeholder="选择私信模板（选择“默认”则使用第三方API）",
+            min_values=1,
             max_values=1,
-            options=self.cog._get_dm_template_select_options(),
-            required=False
+            options=self.cog._get_dm_template_select_options()
         )
         self.add_item(discord.ui.Label(
             text="私信模板",
-            description="可留空，留空时将使用 default.txt",
+            description="请选择模板；选择“默认（第三方API）”时将使用 default.txt",
             component=self.template_select
         ))
 
-    async def safe_defer(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-
     async def on_submit(self, interaction: discord.Interaction):
-        await self.safe_defer(interaction)
+        await safe_defer(interaction)
 
         reason = self.reason.value.strip() or "付费违规第三方"
         selected_values = getattr(self.template_select, "values", []) or []
@@ -150,9 +142,9 @@ class RemoteQuickPunishModal(discord.ui.Modal):
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         print(f"RemoteQuickPunishModal错误: {error}")
         try:
-            await self.safe_defer(interaction)
+            await safe_defer(interaction)
             await interaction.followup.send(f"❌ 发生错误：{str(error)}", ephemeral=True)
-        except:
+        except Exception:
             pass
 
 
@@ -168,22 +160,17 @@ class QuickPunishConfirmView(discord.ui.View):
         # 添加下拉选单（动态读取xiaozuowen目录的txt文件）
         self.add_item(TemplateSelect(cog=self.cog))
 
-    async def safe_defer(self, interaction: discord.Interaction):
-        """安全的defer响应"""
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-
     def _disable_all(self):
         for child in self.children:
             try:
                 child.disabled = True
-            except:
+            except Exception:
                 pass
 
     @discord.ui.button(label="确认执行", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         # 黄金法则：先defer
-        await self.safe_defer(interaction)
+        await safe_defer(interaction)
 
         # 未选择模板时，回退到默认模板 xiaozuowen/default.txt
         chosen_template = self.selected_template_filename or "default.txt"
@@ -206,7 +193,7 @@ class QuickPunishConfirmView(discord.ui.View):
     @discord.ui.button(label="取消", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         # 黄金法则：先defer
-        await self.safe_defer(interaction)
+        await safe_defer(interaction)
         self._disable_all()
         embed = discord.Embed(
             title="操作已取消",
@@ -227,10 +214,6 @@ class RevokeConfirmView(discord.ui.View):
         self.latest_record = latest_record
         self.revoke_record = revoke_record
 
-    async def safe_defer(self, interaction: discord.Interaction):
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-
     def _disable_all(self):
         for child in self.children:
             try:
@@ -240,7 +223,7 @@ class RevokeConfirmView(discord.ui.View):
 
     @discord.ui.button(label="确认继续撤销", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.safe_defer(interaction)
+        await safe_defer(interaction)
         self._disable_all()
 
         success, message = await self.cog._execute_revoke_record(
@@ -259,7 +242,7 @@ class RevokeConfirmView(discord.ui.View):
 
     @discord.ui.button(label="取消", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.safe_defer(interaction)
+        await safe_defer(interaction)
         self._disable_all()
         embed = discord.Embed(
             title="操作已取消",
@@ -278,12 +261,11 @@ class TemplateSelect(discord.ui.Select):
     def __init__(self, cog):
         self.cog = cog
         options = self.cog._get_dm_template_select_options()
-        super().__init__(placeholder="要发送的私信模板（不选默认为第三方API）", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="要发送的私信模板（选择“默认”则使用第三方API）", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         # 黄金法则：先defer
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
 
         chosen = self.values[0]
         view: QuickPunishConfirmView = self.view
@@ -502,8 +484,14 @@ class QuickPunishCog(commands.Cog):
             print(f"加载DM模板失败: {e}")
 
     def _get_dm_template_select_options(self) -> list[discord.SelectOption]:
-        """构建可选的私信模板下拉选项（不含 default.txt / public.txt）"""
-        options: list[discord.SelectOption] = []
+        """构建可选的私信模板下拉选项，首项固定为默认模板。"""
+        options: list[discord.SelectOption] = [
+            discord.SelectOption(
+                label="默认（第三方API）",
+                value="__none__",
+                description="使用 xiaozuowen/default.txt"
+            )
+        ]
         try:
             for fn in sorted(self.dm_templates.keys()):
                 fn_lower = fn.lower()
@@ -512,15 +500,6 @@ class QuickPunishCog(commands.Cog):
                 options.append(discord.SelectOption(label=fn, value=fn))
         except Exception as e:
             print(f"构建模板选项失败: {e}")
-
-        if not options:
-            options = [
-                discord.SelectOption(
-                    label="无可用模板",
-                    value="__none__",
-                    description="xiaozuowen目录下未找到可选私信模板"
-                )
-            ]
         return options
 
     def build_punishment_result_embed(self,
@@ -542,7 +521,7 @@ class QuickPunishCog(commands.Cog):
                     try:
                         timestamp_dt = datetime.fromisoformat(record['timestamp'])
                         time_str = timestamp_dt.strftime('%Y-%m-%d %H:%M')
-                    except:
+                    except Exception:
                         time_str = record['timestamp'][:16]
 
                     status_emoji = {
@@ -1347,7 +1326,7 @@ class QuickPunishCog(commands.Cog):
             try:
                 timestamp = datetime.fromisoformat(record['timestamp'])
                 time_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
-            except:
+            except Exception:
                 time_str = record['timestamp']
 
             roles_str = "无"
@@ -1663,7 +1642,7 @@ class QuickPunishCog(commands.Cog):
     async def quick_punish_query(self, interaction: discord.Interaction, count: int | None = 3):
         """查询快速处罚记录命令"""
         # 立即defer响应
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
         
         # 检查功能是否启用
         if not self.enabled:
@@ -1710,12 +1689,12 @@ class QuickPunishCog(commands.Cog):
                 timestamp=datetime.now()
             )
             
-            for i, record in enumerate(records, 1):
+            for _i, record in enumerate(records, 1):
                 # 解析时间
                 try:
                     timestamp = datetime.fromisoformat(record['timestamp'])
                     time_str = timestamp.strftime('%m-%d %H:%M')
-                except:
+                except Exception:
                     time_str = record['timestamp'][:16]
                 
                 # 状态标记
@@ -1760,7 +1739,7 @@ class QuickPunishCog(commands.Cog):
     @app_commands.guild_only()
     async def quick_punish_revoke(self, interaction: discord.Interaction, user_id: str):
         """撤销快速处罚命令"""
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(interaction)
 
         if not self.enabled:
             await interaction.followup.send(
