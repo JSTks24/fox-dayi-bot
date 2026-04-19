@@ -96,18 +96,38 @@ class RoleSyncCog(commands.Cog):
             print(f"[role_sync] 保存配置失败: {error}")
             raise
 
-    def _update_bot_memory(self) -> None:
-        """从数据库重新加载 trusted_users 到 bot 内存。"""
-        try:
-            conn = sqlite3.connect("users.db")
+    def _load_trusted_users_sync(self) -> list[int]:
+        with sqlite3.connect("users.db") as conn:
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS trusted_users (id TEXT PRIMARY KEY)")
             cursor.execute("SELECT id FROM trusted_users")
-            self.bot.trusted_users = [int(row[0]) for row in cursor.fetchall()]
-            conn.close()
+            return [int(row[0]) for row in cursor.fetchall()]
+
+    async def _update_bot_memory(self) -> None:
+        """从数据库重新加载 trusted_users 到 bot 内存。"""
+        try:
+            self.bot.trusted_users = await asyncio.to_thread(self._load_trusted_users_sync)
         except sqlite3.Error as error:
             print(f"[role_sync] 刷新 bot.trusted_users 失败: {error}")
             raise
+
+    def _sync_trusted_users_sync(self, target_user_ids: set[str]) -> tuple[list[str], int]:
+        with sqlite3.connect("users.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("CREATE TABLE IF NOT EXISTS trusted_users (id TEXT PRIMARY KEY)")
+            cursor.execute("SELECT id FROM trusted_users")
+            existing_ids = {str(row[0]) for row in cursor.fetchall()}
+
+            new_ids = sorted(target_user_ids - existing_ids, key=int)
+            existed_count = len(target_user_ids & existing_ids)
+
+            if new_ids:
+                cursor.executemany(
+                    "INSERT OR IGNORE INTO trusted_users (id) VALUES (?)",
+                    [(user_id,) for user_id in new_ids],
+                )
+
+        return new_ids, existed_count
 
     def _record_sync_result(self, added_count: int) -> None:
         if self.config is None:
@@ -212,29 +232,16 @@ class RoleSyncCog(commands.Cog):
                     target_user_ids.add(str(member.id))
 
             try:
-                conn = sqlite3.connect("users.db")
-                cursor = conn.cursor()
-                cursor.execute("CREATE TABLE IF NOT EXISTS trusted_users (id TEXT PRIMARY KEY)")
-                cursor.execute("SELECT id FROM trusted_users")
-                existing_ids = {str(row[0]) for row in cursor.fetchall()}
-
-                new_ids = sorted(target_user_ids - existing_ids, key=int)
-                existed_count = len(target_user_ids & existing_ids)
-
-                if new_ids:
-                    cursor.executemany(
-                        "INSERT OR IGNORE INTO trusted_users (id) VALUES (?)",
-                        [(user_id,) for user_id in new_ids],
-                    )
-
-                conn.commit()
-                conn.close()
+                new_ids, existed_count = await asyncio.to_thread(
+                    self._sync_trusted_users_sync,
+                    target_user_ids,
+                )
             except sqlite3.Error as error:
                 print(f"[role_sync] 数据库同步失败: {error}")
                 raise
 
             if new_ids:
-                self._update_bot_memory()
+                await self._update_bot_memory()
 
             return len(new_ids), existed_count
 

@@ -96,7 +96,7 @@ if not all([OPENAI_API_KEY, OPENAI_API_BASE_URL, OPENAI_MODEL]):
     print("[错误] 缺少必要的 OpenAI 环境变量。请检查 .env 文件。")
     bot.openai_client = None
 else:
-    bot.openai_client = openai.OpenAI(
+    bot.openai_client = openai.AsyncOpenAI(
         api_key=OPENAI_API_KEY,
         base_url=OPENAI_API_BASE_URL,
     )
@@ -115,17 +115,23 @@ def is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.id in getattr(bot, "admins", [])
 
 
-def load_database(*, raise_on_error: bool = False) -> None:
+def _load_database_sync() -> tuple[list[int], list[int]]:
+    with sqlite3.connect("users.db") as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM admins")
+        admins = [int(row[0]) for row in cursor.fetchall()]
+
+        cursor.execute("SELECT id FROM trusted_users")
+        trusted_users = [int(row[0]) for row in cursor.fetchall()]
+
+    return admins, trusted_users
+
+
+async def load_database(*, raise_on_error: bool = False) -> None:
     """从 users.db 加载管理员与受信任用户。"""
     try:
-        with sqlite3.connect("users.db") as conn:
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT id FROM admins")
-            admins = [int(row[0]) for row in cursor.fetchall()]
-
-            cursor.execute("SELECT id FROM trusted_users")
-            trusted_users = [int(row[0]) for row in cursor.fetchall()]
+        admins, trusted_users = await asyncio.to_thread(_load_database_sync)
     except sqlite3.Error as exc:
         if raise_on_error:
             raise RuntimeError(f"SQLite 数据库错误: {exc}") from exc
@@ -153,7 +159,7 @@ bot.load_database = load_database
 @bot.event
 async def setup_hook():
     """机器人启动时的设置钩子。"""
-    bot.load_database()
+    await bot.load_database()
     await load_cogs()
     print("✅ 所有扩展已加载")
 

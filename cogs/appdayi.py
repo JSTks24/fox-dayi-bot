@@ -16,7 +16,7 @@ import openai
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.utils import safe_defer, encode_image_to_base64, compress_image, get_file_size_kb
+from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image, get_file_size_kb
 
 # --- 从 bot.py 引入的辅助函数和类 ---
 
@@ -331,7 +331,7 @@ class PublicStreamReply:
 class AppDayi(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.message_cooldowns: dict[int, datetime] = {}
+        self.message_cooldowns = CooldownManager(30)
         self.cooldown_duration = 30
         self._default_prompt_cache: str | None = None
 
@@ -351,17 +351,6 @@ class AppDayi(commands.Cog):
         guessed_type, _ = mimetypes.guess_type(attachment.filename)
         return bool(guessed_type and guessed_type.startswith("image/"))
 
-    def _clean_expired_cooldowns(self) -> None:
-        """清理过期的冷却记录。"""
-        current_time = datetime.now()
-        expired_messages = [
-            msg_id
-            for msg_id, last_used in self.message_cooldowns.items()
-            if (current_time - last_used).total_seconds() > self.cooldown_duration
-        ]
-        for msg_id in expired_messages:
-            del self.message_cooldowns[msg_id]
-
     def _check_and_update_cooldown(self, message_id: int) -> tuple[bool, int]:
         """
         检查消息是否在冷却中，如果不在则更新冷却时间。
@@ -369,18 +358,7 @@ class AppDayi(commands.Cog):
         Returns:
             (is_on_cooldown, remaining_seconds)
         """
-        self._clean_expired_cooldowns()
-        current_time = datetime.now()
-
-        if message_id in self.message_cooldowns:
-            last_used = self.message_cooldowns[message_id]
-            elapsed = (current_time - last_used).total_seconds()
-            if elapsed < self.cooldown_duration:
-                remaining = int(self.cooldown_duration - elapsed)
-                return True, remaining
-
-        self.message_cooldowns[message_id] = current_time
-        return False, 0
+        return self.message_cooldowns.check_and_update(message_id)
 
     async def _reply_public_text(self, message: discord.Message, content: str) -> discord.Message:
         return await message.reply(
@@ -963,7 +941,7 @@ class AppDayi(commands.Cog):
         public_session: PublicStreamReply | None = None
         parallel_slot_acquired = False
         display_model_name = self._get_display_model_name()
-        async_client = getattr(self.bot, "openai_async_client", None)
+        client = getattr(self.bot, "openai_client", None)
 
         try:
             banned_user_info = self._get_active_ban_entry(target_user_id)
@@ -1002,7 +980,7 @@ class AppDayi(commands.Cog):
                 for idx, attachment in enumerate(current_image_attachments, start=1):
                     print(f"   图片{idx}: {attachment.filename} ({attachment.size / 1024:.2f} KB)")
 
-            if not async_client:
+            if not client:
                 await self._send_public_error(
                     interaction,
                     message,
@@ -1092,7 +1070,7 @@ class AppDayi(commands.Cog):
 
             await public_session.set_status(STATUS_REQUESTING_AI)
             ai_response = await asyncio.wait_for(
-                self._generate_ai_response(async_client, messages, public_session),
+                self._generate_ai_response(client, messages, public_session),
                 timeout=STREAM_TIMEOUT_SECONDS,
             )
 
@@ -1206,26 +1184,7 @@ class AppDayi(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    """注册 Cog，并确保同步/异步 OpenAI 客户端都可用。"""
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    openai_api_base_url = os.getenv("OPENAI_API_BASE_URL")
-    openai_model = os.getenv("OPENAI_MODEL")
-
-    if not all([openai_api_key, openai_api_base_url, openai_model]):
-        print(" [错误](来自App) 缺少必要的 OpenAI 环境变量。")
-        bot.openai_client = None
-        bot.openai_async_client = None
-    else:
-        if not hasattr(bot, "openai_client") or bot.openai_client is None:
-            bot.openai_client = openai.OpenAI(
-                api_key=openai_api_key,
-                base_url=openai_api_base_url,
-            )
-
-        if not hasattr(bot, "openai_async_client") or bot.openai_async_client is None:
-            bot.openai_async_client = openai.AsyncOpenAI(
-                api_key=openai_api_key,
-                base_url=openai_api_base_url,
-            )
-
+    """注册 Cog，依赖主入口预先初始化异步 OpenAI 客户端。"""
+    if not getattr(bot, "openai_client", None):
+        print("⚠️ [AppDayi] bot.openai_client 未初始化，相关功能将不可用。")
     await bot.add_cog(AppDayi(bot))

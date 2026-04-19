@@ -1,6 +1,7 @@
 import asyncio
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -101,6 +102,35 @@ class UtilsTests(unittest.TestCase):
         self.assertIn("123", content)
         self.assertIn("/ping", content)
         self.assertIn("成功", content)
+
+    def test_ttl_cache_expires_entry(self):
+        cache = utils.TTLCache[str]()
+        cache.set("alpha", "value", ttl_seconds=0.01)
+
+        self.assertEqual(cache.get("alpha"), "value")
+
+        time.sleep(0.03)
+
+        self.assertIsNone(cache.get("alpha"))
+        self.assertNotIn("alpha", cache)
+
+    def test_cooldown_manager_check_and_update(self):
+        manager = utils.CooldownManager(default_seconds=0.05)
+
+        first_hit = manager.check_and_update("message-1")
+        second_hit = manager.check("message-1")
+
+        self.assertEqual(first_hit, (False, 0))
+        self.assertTrue(second_hit[0])
+        self.assertGreaterEqual(second_hit[1], 1)
+
+    def test_cooldown_manager_cleans_expired_entries(self):
+        manager = utils.CooldownManager(default_seconds=0.01)
+        manager.set_cooldown("user-1")
+
+        time.sleep(0.03)
+
+        self.assertEqual(manager.check("user-1"), (False, 0))
 
 
 if __name__ == "__main__":

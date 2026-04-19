@@ -15,25 +15,25 @@ from collections.abc import Sequence
 # 新手开帖 论坛频道 ID
 try:
     TARGET_FORUM_ID = int(os.getenv("TARGET_FORUM_ID", 0))
-except:
+except Exception:
     TARGET_FORUM_ID = 0
 
 # 新手答疑 汇报频道 ID
 try:
     REPORT_CHANNEL_ID = int(os.getenv("REPORT_CHANNEL_ID", 0))
-except:
+except Exception:
     REPORT_CHANNEL_ID = 0
 
 # 已解决标签 ID
 try:
     RESOLVED_TAG_ID = int(os.getenv("RESOLVED_TAG_ID", 0))
-except:
+except Exception:
     RESOLVED_TAG_ID = 0
 
 # 待解决标签 ID
 try:
     UNSOLVED_TAG_ID = int(os.getenv("UNSOLVED_TAG_ID", 0))
-except:
+except Exception:
     UNSOLVED_TAG_ID = 0
 
 # 优先使用通用模型，如果没有则回退到图片描述模型
@@ -56,9 +56,11 @@ class UnansweredFilter(commands.Cog):
         self._ai_batch_size: int = 4
         self._ai_batch_interval_seconds: int = 10
 
-        self._ensure_db_ready()
         # 启动定时任务 (每日北京时间 12:00 = UTC 04:00)
         self.daily_check_task.start()
+
+    async def cog_load(self):
+        await asyncio.to_thread(self._ensure_db_ready)
 
 
     def cog_unload(self):
@@ -69,42 +71,62 @@ class UnansweredFilter(commands.Cog):
         if not os.path.exists(DB_DIR):
             os.makedirs(DB_DIR, exist_ok=True)
 
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        # 帖子状态缓存：记录上次分析时的状态，避免重复分析
-        c.execute('''CREATE TABLE IF NOT EXISTS thread_cache (
-            thread_id INTEGER PRIMARY KEY,
-            last_message_id INTEGER,
-            reply_count INTEGER,
-            status TEXT,
-            reason TEXT,
-            last_analyzed_at TIMESTAMP
-        )''')
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            # 帖子状态缓存：记录上次分析时的状态，避免重复分析
+            c.execute('''CREATE TABLE IF NOT EXISTS thread_cache (
+                thread_id INTEGER PRIMARY KEY,
+                last_message_id INTEGER,
+                reply_count INTEGER,
+                status TEXT,
+                reason TEXT,
+                last_analyzed_at TIMESTAMP
+            )''')
 
-    def _get_cached_thread(self, thread_id: int):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT last_message_id, reply_count, status, reason FROM thread_cache WHERE thread_id=?", (thread_id,))
-        row = c.fetchone()
-        conn.close()
-        return row
+    def _get_cached_thread_sync(self, thread_id: int):
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT last_message_id, reply_count, status, reason FROM thread_cache WHERE thread_id=?",
+                (thread_id,),
+            )
+            return c.fetchone()
 
-    def _update_thread_cache(self, thread_id: int, last_msg_id: int, reply_count: int, status: str, reason: str):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO thread_cache VALUES (?,?,?,?,?,?)", 
-                  (thread_id, last_msg_id, reply_count, status, reason, datetime.datetime.now()))
-        conn.commit()
-        conn.close()
+    async def _get_cached_thread(self, thread_id: int):
+        return await asyncio.to_thread(self._get_cached_thread_sync, thread_id)
 
-    def _delete_thread_cache(self, thread_id: int):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("DELETE FROM thread_cache WHERE thread_id=?", (thread_id,))
-        conn.commit()
-        conn.close()
+    def _update_thread_cache_sync(
+        self,
+        thread_id: int,
+        last_msg_id: int,
+        reply_count: int,
+        status: str,
+        reason: str,
+    ):
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            c.execute(
+                "INSERT OR REPLACE INTO thread_cache VALUES (?,?,?,?,?,?)",
+                (thread_id, last_msg_id, reply_count, status, reason, datetime.datetime.now()),
+            )
+
+    async def _update_thread_cache(self, thread_id: int, last_msg_id: int, reply_count: int, status: str, reason: str):
+        await asyncio.to_thread(
+            self._update_thread_cache_sync,
+            thread_id,
+            last_msg_id,
+            reply_count,
+            status,
+            reason,
+        )
+
+    def _delete_thread_cache_sync(self, thread_id: int):
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM thread_cache WHERE thread_id=?", (thread_id,))
+
+    async def _delete_thread_cache(self, thread_id: int):
+        await asyncio.to_thread(self._delete_thread_cache_sync, thread_id)
 
     def _stringify_ai_content(self, content: Any) -> str:
         """把 OpenAI/Gemini 返回的 content 尽量转成可读文本。"""
@@ -235,7 +257,7 @@ class UnansweredFilter(commands.Cog):
             # 尝试 fetch
             try:
                 forum_channel = await self.bot.fetch_channel(TARGET_FORUM_ID)
-            except:
+            except Exception:
                 print(f"❌ [Unanswered] 无法获取论坛频道 {TARGET_FORUM_ID}")
                 return None, [], []
 
@@ -299,7 +321,7 @@ class UnansweredFilter(commands.Cog):
             days_silent = time_since_active.days
 
             # 3. 缓存比对
-            cached = self._get_cached_thread(thread.id)
+            cached = await self._get_cached_thread(thread.id)
             # 缓存命中条件：最后消息ID一致 AND 真实回复数一致 AND (静默期未满7天 或 已经是unsolved)
             # 如果静默期刚满7天，需要强制重新判定（因为可能变成“技术性静默已解决”）
             if cached and cached[0] == last_msg_id and cached[1] == true_reply_count:
@@ -323,7 +345,7 @@ class UnansweredFilter(commands.Cog):
                     async for m in thread.history(limit=1, oldest_first=True):
                         starter_msg = m
                         break
-                except:
+                except Exception:
                     pass
 
             if not starter_msg:
@@ -437,8 +459,7 @@ class UnansweredFilter(commands.Cog):
             if not self.bot.openai_client:
                 raise RuntimeError("OpenAI 客户端未初始化")
 
-            response = await asyncio.to_thread(
-                self.bot.openai_client.chat.completions.create,
+            response = await self.bot.openai_client.chat.completions.create(
                 model=AI_MODEL_NAME,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -760,7 +781,7 @@ class UnansweredFilter(commands.Cog):
 
             # 更新 Thread 缓存
             last_msg_id = t.last_message_id or 0
-            self._update_thread_cache(t.id, last_msg_id, reply_cnt, status, reason)
+            await self._update_thread_cache(t.id, last_msg_id, reply_cnt, status, reason)
 
             if status == "solved":
                 final_solved.append((t, reason))
@@ -791,7 +812,8 @@ class UnansweredFilter(commands.Cog):
 
             # 添加已解决标签
             if resolved_tag not in new_tags:
-                if len(new_tags) >= 5: new_tags.pop(0) # 保持 Discord 5个标签限制
+                if len(new_tags) >= 5:
+                    new_tags.pop(0)  # 保持 Discord 5 个标签限制
                 new_tags.append(resolved_tag)
                 should_edit = True
 
@@ -825,7 +847,8 @@ class UnansweredFilter(commands.Cog):
                 if unsolved_tag not in t.applied_tags:
                     try:
                         new_tags = list(t.applied_tags)
-                        if len(new_tags) >= 5: new_tags.pop(0)
+                        if len(new_tags) >= 5:
+                            new_tags.pop(0)
                         new_tags.append(unsolved_tag)
                         await self._edit_thread_tags_with_archive_handling(t, new_tags, "AI判定待解决(补全标签)")
                         print(f"🔹 [Unanswered] 为 {t.name} 补全了待解决标签")
@@ -850,7 +873,7 @@ class UnansweredFilter(commands.Cog):
                 if zero_replies:
                     # 限制显示数量，防止Embed超长
                     lines = []
-                    for t, cnt in zero_replies[:10]:
+                    for t, _cnt in zero_replies[:10]:
                         lines.append(f"🚨 **[{t.name}]({t.jump_url})** <t:{int(t.created_at.timestamp())}:R>")
 
                     if len(zero_replies) > 10:
@@ -893,7 +916,8 @@ class UnansweredFilter(commands.Cog):
 
         # 检查是否有“已解决”标签
         # 注意：这里需要重新获取最新的 tags 列表
-        if not isinstance(thread.parent, discord.ForumChannel): return
+        if not isinstance(thread.parent, discord.ForumChannel):
+            return
 
         # 检查发帖时间是否超过 14 天
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -911,7 +935,8 @@ class UnansweredFilter(commands.Cog):
                 new_tags = [t for t in thread.applied_tags if t.id != resolved_tag.id]
                 
                 if unsolved_tag and unsolved_tag not in new_tags:
-                    if len(new_tags) >= 5: new_tags.pop(0)
+                    if len(new_tags) >= 5:
+                        new_tags.pop(0)
                     new_tags.append(unsolved_tag)
                 
                 await thread.edit(applied_tags=new_tags, reason=f"用户 {message.author.name} 新增回复，自动重开")
@@ -919,7 +944,7 @@ class UnansweredFilter(commands.Cog):
                 await thread.send("🔓 **检测到新回复，已自动切换为「❓待解决」标签。**\n本帖将进入明日的自动扫描队列。")
 
                 # 强制删除缓存，确保下次扫描时重新判定
-                self._delete_thread_cache(thread.id)
+                await self._delete_thread_cache(thread.id)
                 print(f"🔓 [Unanswered] 帖子 {thread.id} 已重开")
 
             except Exception as e:

@@ -8,7 +8,7 @@ import asyncio
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Any
-from cogs.utils import log_slash_command, safe_defer as _safe_defer
+from cogs.utils import CooldownManager, log_slash_command, safe_defer as _safe_defer
 
 
 DB_DIR = 'tagger'
@@ -26,14 +26,12 @@ class Fox14Tagger(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         _ensure_dirs_and_db()
-        self._init_database()
 
         # ---- 告警功能配置与冷却窗口（内存） ----
         self._alert_enabled: bool = True
         self._target_channel_id: int | None = None
         self._alert_channel_id: int | None = None
         self._min_interval_minutes: int = 30
-        self._cooldown_until: dict[tuple[int, int], int] = {}
         
         try:
             target_str = os.getenv("TARGET_CHANNEL_OR_THREAD", "").strip()
@@ -56,6 +54,8 @@ class Fox14Tagger(commands.Cog):
         except Exception as e:
             self._alert_enabled = False
             print(f"[tagger] 解析 .env 失败：{e}，告警功能禁用")
+
+        self._alert_cooldowns = CooldownManager(default_seconds=self._min_interval_minutes * 60)
         
         if self._alert_enabled:
             print(f"[tagger] Fox14 标记告警已启用：ALERT={self._alert_channel_id}, MIN_INTERVAL={self._min_interval_minutes}min, TARGET(不参与触发)={self._target_channel_id}")
@@ -63,6 +63,9 @@ class Fox14Tagger(commands.Cog):
         # 后台任务：每日北京时间0点过期扫描
         self._expiry_task: asyncio.Task | None = None
         self._expiry_task = asyncio.create_task(self._expiry_scheduler())
+
+    async def cog_load(self):
+        await asyncio.to_thread(self._init_database)
 
     def cog_unload(self):
         # 取消后台任务
@@ -177,158 +180,163 @@ class Fox14Tagger(commands.Cog):
     def _get_conn(self):
         return sqlite3.connect(DB_PATH)
 
+    def _refresh_alert_cooldown(self, guild_id: int, user_id: int) -> bool:
+        """刷新滑动冷却窗口，并返回本次是否需要发送告警。"""
+        key = (guild_id, user_id)
+        is_on_cooldown, _ = self._alert_cooldowns.check(key)
+        self._alert_cooldowns.set_cooldown(key)
+        return not is_on_cooldown
+
     def _init_database(self):
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS tag_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                status TEXT NOT NULL,
-                guild_id TEXT NOT NULL,
-                target_user_id TEXT NOT NULL,
-                message_link TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                tagged_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                tagger_id TEXT NOT NULL,
-                tagger_name TEXT NOT NULL,
-                expire_at_epoch INTEGER NOT NULL,
-                expire_input TEXT NOT NULL,
-                scope_id INTEGER NOT NULL DEFAULT -1
-            )
-        ''')
-        cur.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_guild_status ON tag_records (guild_id, status, id DESC)')
-        cur.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_expiry_scan ON tag_records (status, expire_at_epoch)')
-        cur.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_scope ON tag_records (guild_id, target_user_id, status, expire_at_epoch, scope_id, id DESC)')
-        conn.commit()
-        conn.close()
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS tag_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    status TEXT NOT NULL,
+                    guild_id TEXT NOT NULL,
+                    target_user_id TEXT NOT NULL,
+                    message_link TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    tagged_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    tagger_id TEXT NOT NULL,
+                    tagger_name TEXT NOT NULL,
+                    expire_at_epoch INTEGER NOT NULL,
+                    expire_input TEXT NOT NULL,
+                    scope_id INTEGER NOT NULL DEFAULT -1
+                )
+            ''')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_guild_status ON tag_records (guild_id, status, id DESC)')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_expiry_scan ON tag_records (status, expire_at_epoch)')
+            cur.execute('CREATE INDEX IF NOT EXISTS idx_tag_records_scope ON tag_records (guild_id, target_user_id, status, expire_at_epoch, scope_id, id DESC)')
 
-    def _insert_record(self,
-                       guild_id: int,
-                       target_user_id: int,
-                       message_link: str,
-                       reason: str,
-                       tagger_id: int,
-                       tagger_name: str,
-                       expire_at_epoch: int,
-                       expire_input: str,
-                       scope_id: int) -> int:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute('''
-            INSERT INTO tag_records
-            (status, guild_id, target_user_id, message_link, reason, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            '正常',
-            str(guild_id),
-            str(target_user_id),
-            message_link,
-            reason,
-            str(tagger_id),
-            tagger_name,
-            int(expire_at_epoch),
-            expire_input,
-            int(scope_id)
-        ))
-        rid = cur.lastrowid
-        conn.commit()
-        conn.close()
-        return rid
-
-    def _fetch_record_by_id(self, record_id: int) -> dict[str, Any] | None:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute('''
-            SELECT id, status, guild_id, target_user_id, message_link, reason,
-                   tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
-            FROM tag_records
-            WHERE id = ?
-        ''', (record_id,))
-        row = cur.fetchone()
-        conn.close()
-        if not row:
-            return None
+    def _row_to_record(self, row: tuple[Any, ...]) -> dict[str, Any]:
         keys = ['id', 'status', 'guild_id', 'target_user_id', 'message_link', 'reason',
                 'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id']
         return dict(zip(keys, row, strict=False))
 
-    def _clear_record_by_id(self, record_id: int) -> bool:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute('UPDATE tag_records SET status = ? WHERE id = ? AND status = ?', ('已清除', record_id, '正常'))
-        affected = cur.rowcount
-        conn.commit()
-        conn.close()
-        return affected > 0
+    async def _insert_record(self,
+                             guild_id: int,
+                             target_user_id: int,
+                             message_link: str,
+                             reason: str,
+                             tagger_id: int,
+                             tagger_name: str,
+                             expire_at_epoch: int,
+                             expire_input: str,
+                             scope_id: int) -> int:
+        def _write() -> int:
+            with self._get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute('''
+                    INSERT INTO tag_records
+                    (status, guild_id, target_user_id, message_link, reason, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    '正常',
+                    str(guild_id),
+                    str(target_user_id),
+                    message_link,
+                    reason,
+                    str(tagger_id),
+                    tagger_name,
+                    int(expire_at_epoch),
+                    expire_input,
+                    int(scope_id)
+                ))
+                return cur.lastrowid
 
-    def _list_recent_normal_records(self, guild_id: int, limit: int = 10) -> list[dict[str, Any]]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute('''
-            SELECT id, status, guild_id, target_user_id, message_link, reason,
-                   tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
-            FROM tag_records
-            WHERE guild_id = ? AND status = '正常'
-            ORDER BY id DESC
-            LIMIT ?
-        ''', (str(guild_id), limit))
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(zip(['id', 'status', 'guild_id', 'target_user_id', 'message_link', 'reason',
-                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r, strict=False))
-                for r in rows]
+        return await asyncio.to_thread(_write)
 
-    def _list_user_normal_records(self, guild_id: int, user_id: int) -> list[dict[str, Any]]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute('''
-            SELECT id, status, guild_id, target_user_id, message_link, reason,
-                   tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
-            FROM tag_records
-            WHERE guild_id = ? AND target_user_id = ? AND status = '正常'
-            ORDER BY id DESC
-        ''', (str(guild_id), str(user_id)))
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(zip(['id', 'status', 'guild_id', 'target_user_id', 'message_link', 'reason',
-                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r, strict=False))
-                for r in rows]
+    async def _fetch_record_by_id(self, record_id: int) -> dict[str, Any] | None:
+        def _read() -> dict[str, Any] | None:
+            with self._get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute('''
+                    SELECT id, status, guild_id, target_user_id, message_link, reason,
+                           tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
+                    FROM tag_records
+                    WHERE id = ?
+                ''', (record_id,))
+                row = cur.fetchone()
+                return self._row_to_record(row) if row else None
 
-    def _list_all_records_of_guild(self, guild_id: int) -> list[dict[str, Any]]:
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute('''
-            SELECT id, status, guild_id, target_user_id, message_link, reason,
-                   tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
-            FROM tag_records
-            WHERE guild_id = ?
-            ORDER BY id DESC
-        ''', (str(guild_id),))
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(zip(['id', 'status', 'guild_id', 'target_user_id', 'message_link', 'reason',
-                          'tagged_at', 'tagger_id', 'tagger_name', 'expire_at_epoch', 'expire_input', 'scope_id'], r, strict=False))
-                for r in rows]
+        return await asyncio.to_thread(_read)
 
-    def _expiry_scan_once(self) -> int:
+    async def _clear_record_by_id(self, record_id: int) -> bool:
+        def _clear() -> bool:
+            with self._get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute('UPDATE tag_records SET status = ? WHERE id = ? AND status = ?', ('已清除', record_id, '正常'))
+                return cur.rowcount > 0
+
+        return await asyncio.to_thread(_clear)
+
+    async def _list_recent_normal_records(self, guild_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        def _read() -> list[dict[str, Any]]:
+            with self._get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute('''
+                    SELECT id, status, guild_id, target_user_id, message_link, reason,
+                           tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
+                    FROM tag_records
+                    WHERE guild_id = ? AND status = '正常'
+                    ORDER BY id DESC
+                    LIMIT ?
+                ''', (str(guild_id), limit))
+                return [self._row_to_record(row) for row in cur.fetchall()]
+
+        return await asyncio.to_thread(_read)
+
+    async def _list_user_normal_records(self, guild_id: int, user_id: int) -> list[dict[str, Any]]:
+        def _read() -> list[dict[str, Any]]:
+            with self._get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute('''
+                    SELECT id, status, guild_id, target_user_id, message_link, reason,
+                           tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
+                    FROM tag_records
+                    WHERE guild_id = ? AND target_user_id = ? AND status = '正常'
+                    ORDER BY id DESC
+                ''', (str(guild_id), str(user_id)))
+                return [self._row_to_record(row) for row in cur.fetchall()]
+
+        return await asyncio.to_thread(_read)
+
+    async def _list_all_records_of_guild(self, guild_id: int) -> list[dict[str, Any]]:
+        def _read() -> list[dict[str, Any]]:
+            with self._get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute('''
+                    SELECT id, status, guild_id, target_user_id, message_link, reason,
+                           tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
+                    FROM tag_records
+                    WHERE guild_id = ?
+                    ORDER BY id DESC
+                ''', (str(guild_id),))
+                return [self._row_to_record(row) for row in cur.fetchall()]
+
+        return await asyncio.to_thread(_read)
+
+    async def _expiry_scan_once(self) -> int:
         """
         过期扫描：将 status='正常' 且 expire_at_epoch!=-1 且 expire_at_epoch<=当前 的记录批量更新为 '已清除'
         返回受影响行数
         """
-        now_epoch = int(datetime.utcnow().timestamp())
-        conn = self._get_conn()
-        cur = conn.cursor()
-        cur.execute('''
-            UPDATE tag_records
-            SET status = '已清除'
-            WHERE status = '正常'
-              AND expire_at_epoch != -1
-              AND expire_at_epoch <= ?
-        ''', (now_epoch,))
-        affected = cur.rowcount
-        conn.commit()
-        conn.close()
-        return affected
+        def _scan() -> int:
+            now_epoch = int(datetime.utcnow().timestamp())
+            with self._get_conn() as conn:
+                cur = conn.cursor()
+                cur.execute('''
+                    UPDATE tag_records
+                    SET status = '已清除'
+                    WHERE status = '正常'
+                      AND expire_at_epoch != -1
+                      AND expire_at_epoch <= ?
+                ''', (now_epoch,))
+                return cur.rowcount
+
+        return await asyncio.to_thread(_scan)
 
     # ------------- 调度：每日北京时间0点 -------------
 
@@ -353,7 +361,7 @@ class Fox14Tagger(commands.Cog):
                 delay = await self._seconds_until_next_beijing_midnight()
                 await asyncio.sleep(delay)
                 try:
-                    self._expiry_scan_once()
+                    await self._expiry_scan_once()
                 except Exception as e:
                     print(f"[tagger] 过期扫描出错: {e}")
                 # 下一轮继续
@@ -501,7 +509,7 @@ class Fox14Tagger(commands.Cog):
         
         # 插入数据库
         try:
-            record_id = self._insert_record(
+            record_id = await self._insert_record(
                 guild_id=interaction.guild.id,
                 target_user_id=target_user.id,
                 message_link=used_message_link,
@@ -553,10 +561,10 @@ class Fox14Tagger(commands.Cog):
             return
 
         if user:
-            records = self._list_user_normal_records(guild.id, user.id)
+            records = await self._list_user_normal_records(guild.id, user.id)
             title = f"📋 用户 {user.display_name} (ID: {user.id}) 的标记记录（正常）"
         else:
-            records = self._list_recent_normal_records(guild.id, limit=10)
+            records = await self._list_recent_normal_records(guild.id, limit=10)
             title = "📋 最近10条标记记录（正常）"
 
         if not records:
@@ -609,7 +617,7 @@ class Fox14Tagger(commands.Cog):
             log_slash_command(interaction, False)
             return
 
-        rec = self._fetch_record_by_id(record_id)
+        rec = await self._fetch_record_by_id(record_id)
         if not rec:
             await interaction.followup.send("❌ 记录不存在。", ephemeral=True)
             log_slash_command(interaction, False)
@@ -625,7 +633,7 @@ class Fox14Tagger(commands.Cog):
             log_slash_command(interaction, True)
             return
 
-        success = self._clear_record_by_id(record_id)
+        success = await self._clear_record_by_id(record_id)
         if not success:
             await interaction.followup.send("❌ 清除失败，可能记录状态已变化。", ephemeral=True)
             log_slash_command(interaction, False)
@@ -662,7 +670,7 @@ class Fox14Tagger(commands.Cog):
             log_slash_command(interaction, False)
             return
 
-        records = self._list_all_records_of_guild(guild.id)
+        records = await self._list_all_records_of_guild(guild.id)
         text = self._format_records_as_text(records)
         file = discord.File(io.BytesIO(text.encode('utf-8')),
                             filename=f"tag_records_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
@@ -686,14 +694,14 @@ class Fox14Tagger(commands.Cog):
                 ch = None
         return ch  # 可能是 TextChannel 或 Thread，均可 send()
 
-    def _get_effective_user_records(self, guild_id: int, user_id: int, now_epoch: int) -> list[dict[str, Any]]:
+    async def _get_effective_user_records(self, guild_id: int, user_id: int, now_epoch: int) -> list[dict[str, Any]]:
         """
         获取用户在当前服务器的有效标记记录：
         - status='正常'
         - expire_at_epoch == -1 或 > now
         返回按 id DESC（最近优先）的列表。
         """
-        records = self._list_user_normal_records(guild_id, user_id)
+        records = await self._list_user_normal_records(guild_id, user_id)
 
         def _is_valid(rec: dict[str, Any]) -> bool:
             try:
@@ -725,7 +733,7 @@ class Fox14Tagger(commands.Cog):
             guild_id = message.guild.id
             
             # 查询有效标记记录
-            effective_records = self._get_effective_user_records(guild_id, user_id, now_epoch)
+            effective_records = await self._get_effective_user_records(guild_id, user_id, now_epoch)
             if not effective_records:
                 return  # 未被标记或均已过期/清除
             
@@ -735,10 +743,7 @@ class Fox14Tagger(commands.Cog):
                 return  # 范围不匹配，不触发
 
             # 冷却窗口判定（滑动刷新）
-            until = self._cooldown_until.get((guild_id, user_id), 0)
-            send_alert = now_epoch > until
-            # 每次发言都刷新冷却到期时间（滑动窗口）
-            self._cooldown_until[(guild_id, user_id)] = now_epoch + self._min_interval_minutes * 60
+            send_alert = self._refresh_alert_cooldown(guild_id, user_id)
             
             if not send_alert:
                 return  # 窗口内不重复告警
@@ -847,7 +852,7 @@ class Fox14TagModal(discord.ui.Modal):
         # 写入数据库
         try:
             scope_id = -1 if (self.scope_selection or "channel").lower() == "guild" else interaction.channel.id
-            record_id = self.cog._insert_record(
+            record_id = await self.cog._insert_record(
                 guild_id=self.target_message.guild.id,
                 target_user_id=self.target_user.id,
                 message_link=message_link,
@@ -980,7 +985,7 @@ class Fox14TagPanelView(discord.ui.View):
         records: list[dict[str, Any]] = []
         if guild is not None:
             try:
-                records = self.cog._list_user_normal_records(guild.id, self.target_user.id)[:3]
+                records = (await self.cog._list_user_normal_records(guild.id, self.target_user.id))[:3]
             except Exception:
                 records = []
         if not records:
@@ -1034,7 +1039,7 @@ class Fox14TagPanelView(discord.ui.View):
         # 写入数据库
         try:
             scope_id = -1 if (self.scope_selection or "channel").lower() == "guild" else interaction.channel.id
-            self.cog._insert_record(
+            await self.cog._insert_record(
                 guild_id=self.target_message.guild.id,
                 target_user_id=self.target_user.id,
                 message_link=self.message_link,

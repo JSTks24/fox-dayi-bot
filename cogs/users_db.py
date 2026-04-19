@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 
 import discord
@@ -13,12 +14,67 @@ class UsersDatabaseCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def _update_bot_data(self) -> None:
+    async def _update_bot_data(self) -> None:
         """复用主入口的数据库加载逻辑刷新内存权限数据。"""
         loader = getattr(self.bot, "load_database", None)
         if not callable(loader):
             raise RuntimeError("bot.load_database 不可用。")
-        loader(raise_on_error=True)
+        await loader(raise_on_error=True)
+
+    def _apply_permission_changes_sync(
+        self,
+        *,
+        group: str,
+        action: str,
+        target_user_ids: list[int],
+        operator_id: int,
+        operator_name: str,
+    ) -> tuple[list[str], list[str], list[str]]:
+        with sqlite3.connect("users.db") as conn:
+            cursor = conn.cursor()
+
+            if action == "remove" and group == "admins":
+                cursor.execute("SELECT id FROM admins")
+                all_admins = [int(row[0]) for row in cursor.fetchall()]
+                target_admins = [
+                    uid for uid in target_user_ids if uid in all_admins and uid != operator_id
+                ]
+                if target_admins:
+                    if len(target_admins) == 1:
+                        raise PermissionError(
+                            f"❌ 您不能删除其他管理员的权限。用户 `{target_admins[0]}` 是管理员。"
+                        )
+                    admin_list = "`, `".join(str(uid) for uid in target_admins)
+                    raise PermissionError(
+                        f"❌ 您不能删除其他管理员的权限。以下用户是管理员：`{admin_list}`"
+                    )
+
+            success_users: list[str] = []
+            already_exists_users: list[str] = []
+            not_exists_users: list[str] = []
+
+            for target_user_id in target_user_ids:
+                cursor.execute(f"SELECT id FROM {group} WHERE id = ?", (str(target_user_id),))
+                user_exists = cursor.fetchone() is not None
+
+                if action == "add":
+                    if user_exists:
+                        already_exists_users.append(str(target_user_id))
+                        continue
+                    cursor.execute(f"INSERT INTO {group} (id) VALUES (?)", (str(target_user_id),))
+                    success_users.append(str(target_user_id))
+                    print(f"👑 管理员 {operator_name} ({operator_id}) 将用户 {target_user_id} 添加到 {group} 组。")
+                    continue
+
+                if not user_exists:
+                    not_exists_users.append(str(target_user_id))
+                    continue
+
+                cursor.execute(f"DELETE FROM {group} WHERE id = ?", (str(target_user_id),))
+                success_users.append(str(target_user_id))
+                print(f"👑 管理员 {operator_name} ({operator_id}) 将用户 {target_user_id} 从 {group} 组中删除。")
+
+        return success_users, already_exists_users, not_exists_users
 
     @app_commands.command(name="permission", description="[仅管理员] 管理用户权限组")
     @app_commands.describe(
@@ -70,59 +126,17 @@ class UsersDatabaseCog(commands.Cog):
             return
 
         try:
-            with sqlite3.connect("users.db") as conn:
-                cursor = conn.cursor()
-
-                if action == "remove" and group == "admins":
-                    cursor.execute("SELECT id FROM admins")
-                    all_admins = [int(row[0]) for row in cursor.fetchall()]
-                    target_admins = [
-                        uid for uid in target_user_ids if uid in all_admins and uid != interaction.user.id
-                    ]
-                    if target_admins:
-                        if len(target_admins) == 1:
-                            message = f"❌ 您不能删除其他管理员的权限。用户 `{target_admins[0]}` 是管理员。"
-                        else:
-                            admin_list = "`, `".join(str(uid) for uid in target_admins)
-                            message = f"❌ 您不能删除其他管理员的权限。以下用户是管理员：`{admin_list}`"
-                        await interaction.response.send_message(message, ephemeral=True)
-                        log_slash_command(interaction, False)
-                        return
-
-                success_users: list[str] = []
-                already_exists_users: list[str] = []
-                not_exists_users: list[str] = []
-
-                for target_user_id in target_user_ids:
-                    cursor.execute(f"SELECT id FROM {group} WHERE id = ?", (str(target_user_id),))
-                    user_exists = cursor.fetchone() is not None
-
-                    if action == "add":
-                        if user_exists:
-                            already_exists_users.append(str(target_user_id))
-                            continue
-
-                        cursor.execute(f"INSERT INTO {group} (id) VALUES (?)", (str(target_user_id),))
-                        success_users.append(str(target_user_id))
-                        print(
-                            f"👑 管理员 {interaction.user.name} ({interaction.user.id}) "
-                            f"将用户 {target_user_id} 添加到 {group} 组。"
-                        )
-                        continue
-
-                    if not user_exists:
-                        not_exists_users.append(str(target_user_id))
-                        continue
-
-                    cursor.execute(f"DELETE FROM {group} WHERE id = ?", (str(target_user_id),))
-                    success_users.append(str(target_user_id))
-                    print(
-                        f"👑 管理员 {interaction.user.name} ({interaction.user.id}) "
-                        f"将用户 {target_user_id} 从 {group} 组中删除。"
-                    )
+            success_users, already_exists_users, not_exists_users = await asyncio.to_thread(
+                self._apply_permission_changes_sync,
+                group=group,
+                action=action,
+                target_user_ids=target_user_ids,
+                operator_id=interaction.user.id,
+                operator_name=interaction.user.name,
+            )
 
             if success_users:
-                self._update_bot_data()
+                await self._update_bot_data()
 
             embed = discord.Embed(
                 title="📊 权限操作结果",
@@ -157,6 +171,9 @@ class UsersDatabaseCog(commands.Cog):
 
             await interaction.response.send_message(embed=embed, ephemeral=True)
             log_slash_command(interaction, bool(success_users) or not (already_exists_users or not_exists_users))
+        except PermissionError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            log_slash_command(interaction, False)
         except sqlite3.Error as exc:
             await interaction.response.send_message(f"❌ 数据库操作失败: {exc}", ephemeral=True)
             print(f"[错误] 权限管理操作失败: {exc}")

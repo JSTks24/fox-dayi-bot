@@ -1,10 +1,13 @@
 import discord
 from discord.ext import commands
+import asyncio
 import os
 import json
 import sqlite3
 from dotenv import load_dotenv
 from datetime import datetime
+
+QUICK_PUNISH_DB_PATH = "quick_punish.db"
 
 # 加载环境变量
 load_dotenv()
@@ -17,7 +20,9 @@ class SyncPunishDataCog(commands.Cog):
         self.bot = bot
         self.interface_channel_id = self._parse_int(os.getenv("QUICK_PUNISH_INTERFACE_CHANNEL"))
         self.interface_bot_id = self._parse_int(os.getenv("QUICK_PUNISH_INTERFACE_BOT_ID"))
-        self.init_database()
+
+    async def cog_load(self):
+        await asyncio.to_thread(self.init_database)
 
     def _parse_int(self, s: str | None) -> int | None:
         try:
@@ -29,57 +34,55 @@ class SyncPunishDataCog(commands.Cog):
 
     def init_database(self):
         """幂等建表 + 幂等迁移，保证跨模块顺序加载安全"""
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS quick_punish_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                user_name TEXT NOT NULL,
-                punish_count INTEGER DEFAULT 1,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                original_message_id TEXT,
-                original_message_link TEXT,
-                channel_id TEXT,
-                channel_name TEXT,
-                executor_id TEXT NOT NULL,
-                executor_name TEXT NOT NULL,
-                reason TEXT,
-                removed_roles TEXT,
-                status TEXT DEFAULT 'executed',
-                source_type TEXT DEFAULT 'local',
-                removed_roles_by_guild TEXT DEFAULT '{}',
-                source_guild_id TEXT
-            )
-        ''')
+        with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS quick_punish_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    user_name TEXT NOT NULL,
+                    punish_count INTEGER DEFAULT 1,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    original_message_id TEXT,
+                    original_message_link TEXT,
+                    channel_id TEXT,
+                    channel_name TEXT,
+                    executor_id TEXT NOT NULL,
+                    executor_name TEXT NOT NULL,
+                    reason TEXT,
+                    removed_roles TEXT,
+                    status TEXT DEFAULT 'executed',
+                    source_type TEXT DEFAULT 'local',
+                    removed_roles_by_guild TEXT DEFAULT '{}',
+                    source_guild_id TEXT
+                )
+            ''')
 
-        cursor.execute("PRAGMA table_info(quick_punish_records)")
-        cols = {row[1] for row in cursor.fetchall()}
-        if "source_type" not in cols:
-            cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN source_type TEXT DEFAULT 'local'")
-        if "removed_roles_by_guild" not in cols:
-            cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN removed_roles_by_guild TEXT DEFAULT '{}'")
-        if "source_guild_id" not in cols:
-            cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN source_guild_id TEXT")
+            cursor.execute("PRAGMA table_info(quick_punish_records)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if "source_type" not in cols:
+                cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN source_type TEXT DEFAULT 'local'")
+            if "removed_roles_by_guild" not in cols:
+                cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN removed_roles_by_guild TEXT DEFAULT '{}'")
+            if "source_guild_id" not in cols:
+                cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN source_guild_id TEXT")
 
-        cursor.execute("""
-            UPDATE quick_punish_records
-            SET source_type = 'local'
-            WHERE source_type IS NULL OR TRIM(source_type) = ''
-        """)
-        cursor.execute("""
-            UPDATE quick_punish_records
-            SET source_type = 'sync'
-            WHERE status = 'executed' AND (original_message_link IS NULL OR TRIM(original_message_link) = '')
-              AND (removed_roles IS NULL OR TRIM(removed_roles) = '' OR TRIM(removed_roles) = '[]')
-        """)
-        cursor.execute("""
-            UPDATE quick_punish_records
-            SET removed_roles_by_guild = '{}'
-            WHERE removed_roles_by_guild IS NULL OR TRIM(removed_roles_by_guild) = ''
-        """)
-        conn.commit()
-        conn.close()
+            cursor.execute("""
+                UPDATE quick_punish_records
+                SET source_type = 'local'
+                WHERE source_type IS NULL OR TRIM(source_type) = ''
+            """)
+            cursor.execute("""
+                UPDATE quick_punish_records
+                SET source_type = 'sync'
+                WHERE status = 'executed' AND (original_message_link IS NULL OR TRIM(original_message_link) = '')
+                  AND (removed_roles IS NULL OR TRIM(removed_roles) = '' OR TRIM(removed_roles) = '[]')
+            """)
+            cursor.execute("""
+                UPDATE quick_punish_records
+                SET removed_roles_by_guild = '{}'
+                WHERE removed_roles_by_guild IS NULL OR TRIM(removed_roles_by_guild) = ''
+            """)
 
     def _is_main_text_channel(self, channel) -> bool:
         # 仅监听主层文本频道，排除子区/线程
@@ -123,13 +126,6 @@ class SyncPunishDataCog(commands.Cog):
 
             punished_user_id_str = str(punish_value)
 
-            # 幂等：同一接口消息只处理一次
-            if self._already_processed_interface_message(str(message.id)):
-                return
-
-            # 计算下一次处罚计数（全局递增）
-            next_count = self._compute_next_punish_count(punished_user_id_str)
-
             # 执行者信息：使用接口Bot（即消息作者）
             executor_id = str(self.interface_bot_id) if self.interface_bot_id else str(message.author.id)
             executor_name = getattr(message.author, "name", "同步")
@@ -138,80 +134,48 @@ class SyncPunishDataCog(commands.Cog):
             ts = message.created_at.isoformat() if message.created_at else datetime.now().isoformat()
 
             # 写库（source_type=sync）
-            self._insert_record(
+            next_count = await asyncio.to_thread(
+                self._sync_interface_record,
                 user_id=punished_user_id_str,
-                user_name="不明",
-                punish_count=next_count,
-                timestamp=ts,
-                original_message_id=str(message.id),   # 幂等锚点
-                original_message_link=None,            # 原消息未知
-                channel_id=None,                       # 原频道未知
-                channel_name=None,                     # 原频道未知
+                interface_message_id=str(message.id),
                 executor_id=executor_id,
                 executor_name=executor_name,
-                reason="同步",
-                removed_roles_json="[]",
-                removed_roles_by_guild_json="{}",
-                status="executed",
-                source_type="sync",
+                timestamp=ts,
                 source_guild_id=str(message.guild.id)
             )
+            if next_count is None:
+                return
 
             print(f"[sync_punish] synced: user_id={punished_user_id_str}, count={next_count}, msg={message.id}")
 
         except Exception as e:
             print(f"[sync_punish] error: {e}")
 
-    def _already_processed_interface_message(self, interface_msg_id: str) -> bool:
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
-        try:
+    def _sync_interface_record(
+        self,
+        user_id: str,
+        interface_message_id: str,
+        executor_id: str,
+        executor_name: str,
+        timestamp: str,
+        source_guild_id: str
+    ) -> int | None:
+        with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+            cursor = conn.cursor()
             cursor.execute(
                 "SELECT 1 FROM quick_punish_records WHERE original_message_id = ? AND status = 'executed' LIMIT 1",
-                (interface_msg_id,)
+                (interface_message_id,)
             )
-            return cursor.fetchone() is not None
-        finally:
-            conn.close()
+            if cursor.fetchone() is not None:
+                return None
 
-    def _compute_next_punish_count(self, user_id: str) -> int:
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
-        try:
             cursor.execute(
                 "SELECT MAX(COALESCE(punish_count, 0)) FROM quick_punish_records WHERE user_id = ? AND status != 'failed'",
                 (user_id,)
             )
             row = cursor.fetchone()
-            last = int(row[0]) if row and row[0] is not None else 0
-            return max(1, last + 1)
-        except Exception:
-            return 1
-        finally:
-            conn.close()
+            next_count = max(1, int(row[0]) + 1) if row and row[0] is not None else 1
 
-    def _insert_record(
-        self,
-        user_id: str,
-        user_name: str,
-        punish_count: int,
-        timestamp: str,
-        original_message_id: str | None,
-        original_message_link: str | None,
-        channel_id: str | None,
-        channel_name: str | None,
-        executor_id: str,
-        executor_name: str,
-        reason: str,
-        removed_roles_json: str,
-        removed_roles_by_guild_json: str,
-        status: str,
-        source_type: str,
-        source_guild_id: str | None
-    ):
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
-        try:
             cursor.execute(
                 '''
                 INSERT INTO quick_punish_records
@@ -222,26 +186,24 @@ class SyncPunishDataCog(commands.Cog):
                 ''',
                 (
                     user_id,
-                    user_name,
-                    punish_count,
+                    "不明",
+                    next_count,
                     timestamp,
-                    original_message_id,
-                    original_message_link,
-                    channel_id,
-                    channel_name,
+                    interface_message_id,
+                    None,
+                    None,
+                    None,
                     executor_id,
                     executor_name,
-                    reason,
-                    removed_roles_json,
-                    status,
-                    source_type,
-                    removed_roles_by_guild_json,
+                    "同步",
+                    "[]",
+                    "executed",
+                    "sync",
+                    "{}",
                     source_guild_id
                 )
             )
-            conn.commit()
-        finally:
-            conn.close()
+            return next_count
 
 
 async def setup(bot):

@@ -5,17 +5,14 @@ import os
 import asyncio
 import json
 from datetime import datetime
-import time
-from cogs.utils import safe_defer, encode_image_to_base64, compress_image
+from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image
 
 # --- Cog 主体 ---
 
 class RecognizeURL(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        
-        # 冷却时间跟踪：{message_id: timestamp}
-        self.cooldowns = {}
+        self.cooldowns = CooldownManager(30)
         
         # 将上下文菜单命令添加到 bot 的 tree 中
         self.ctx_menu = app_commands.ContextMenu(
@@ -191,20 +188,12 @@ class RecognizeURL(commands.Cog):
         
         # --- 冷却时间检查 ---
         message_id = message.id
-        current_time = time.time()
-        cooldown_duration = 30  # 30秒冷却时间
-        
-        if message_id in self.cooldowns:
-            time_passed = current_time - self.cooldowns[message_id]
-            if time_passed < cooldown_duration:
-                remaining_time = int(cooldown_duration - time_passed)
-                await interaction.edit_original_response(
-                    content=f'⏱️ 此消息的"查成分"命令正在冷却中，请等待 {remaining_time} 秒后再试。'
-                )
-                return
-        
-        # 记录本次使用时间
-        self.cooldowns[message_id] = current_time
+        is_on_cooldown, remaining_time = self.cooldowns.check_and_update(message_id)
+        if is_on_cooldown:
+            await interaction.edit_original_response(
+                content=f'⏱️ 此消息的"查成分"命令正在冷却中，请等待 {remaining_time} 秒后再试。'
+            )
+            return
         
         # --- 提取图片附件 ---
         image_attachments = [att for att in message.attachments if att.content_type and att.content_type.startswith('image/')]
@@ -262,7 +251,9 @@ class RecognizeURL(commands.Cog):
             
             # 调用API
             client = self.bot.openai_client
-            loop = asyncio.get_event_loop()
+            if not client:
+                await interaction.edit_original_response(content="❌ OpenAI客户端未初始化。")
+                return
             
             # 使用URL_CHECK_MODEL或默认OPENAI_MODEL
             model = os.getenv("URL_CHECK_MODEL", os.getenv("OPENAI_MODEL"))
@@ -271,14 +262,11 @@ class RecognizeURL(commands.Cog):
             
             try:
                 response = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: client.chat.completions.create(
-                            model=model,
-                            messages=messages,
-                            temperature=0.3,
-                            max_tokens=500
-                        )
+                    client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=0.3,
+                        max_tokens=500
                     ),
                     timeout=60.0  # 60秒超时
                 )

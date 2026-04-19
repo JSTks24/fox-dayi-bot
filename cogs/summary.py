@@ -1,8 +1,6 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import os
-import openai
 import asyncio
 import re
 from cogs.utils import safe_defer as _safe_defer
@@ -472,19 +470,15 @@ class Summary(commands.Cog):
                 {"role": "user", "content": full_prompt}
             ]
             
-            # 异步调用API（设置2分钟超时）
-            loop = asyncio.get_event_loop()
+            # 异步调用 API（设置 4 分钟超时）
             response = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: self.bot.openai_client.chat.completions.create(
-                        model="gemini-3.1-pro-preview",  # 🔥 硬编码模型
-                        messages=messages_for_api,
-                        temperature=1.0,
-                        max_tokens=65535
-                    )
+                self.bot.openai_client.chat.completions.create(
+                    model="gemini-3.1-pro-preview",  # 🔥 硬编码模型
+                    messages=messages_for_api,
+                    temperature=1.0,
+                    max_tokens=65535
                 ),
-                timeout=240.0  # 3分钟超时
+                timeout=240.0
             )
             
             if not response or not response.choices:
@@ -520,7 +514,7 @@ class Summary(commands.Cog):
         header_text = "\n".join(header_lines)
 
         # 发送统计信息（如有必要切片）
-        for idx, chunk in enumerate(chunk_text(header_text, MAX_MESSAGE_LENGTH), start=1):
+        for _idx, chunk in enumerate(chunk_text(header_text, MAX_MESSAGE_LENGTH), start=1):
             await interaction.channel.send(content=chunk)
 
         # 按长度切片 AI 响应并逐条发送
@@ -545,20 +539,7 @@ class Summary(commands.Cog):
 
 async def setup(bot: commands.Bot):
     """设置Cog"""
-    # 确保OpenAI客户端已初始化
-    if not hasattr(bot, 'openai_client'):
-        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-        OPENAI_API_BASE_URL = os.getenv("OPENAI_API_BASE_URL")
-        
-        if not all([OPENAI_API_KEY, OPENAI_API_BASE_URL]):
-            print("❌ [Summary] 缺少必要的OpenAI环境变量")
-            bot.openai_client = None
-        else:
-            bot.openai_client = openai.OpenAI(
-                api_key=OPENAI_API_KEY,
-                base_url=OPENAI_API_BASE_URL,
-            )
-            print("✅ [Summary] OpenAI客户端已初始化")
-    
+    if not getattr(bot, 'openai_client', None):
+        print("⚠️ [Summary] bot.openai_client 未初始化，相关功能将不可用")
     await bot.add_cog(Summary(bot))
     print("✅ Summary Cog 已加载")

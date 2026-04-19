@@ -14,7 +14,7 @@ import logging
 import traceback
 import tiktoken
 import time
-from cogs.utils import compress_image, encode_image_to_base64, get_file_size_kb
+from cogs.utils import CooldownManager, TTLCache, compress_image, encode_image_to_base64, get_file_size_kb
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -38,14 +38,6 @@ class MentionCog(commands.Cog):
         
         self.lock = asyncio.Lock()  # 防止并发修改
         
-        # 冷却追踪器
-        self.thread_cooldowns: dict[str, datetime] = {}  # {thread_id: last_used_time}
-        self.user_cooldowns: dict[str, datetime] = {}  # {user_id: last_used_time}
-        
-        # fail2ban 追踪器
-        self.fail2ban_records: dict[str, list[datetime]] = {}  # {user_id: [fail_time1, fail_time2, ...]}
-        self.fail2ban_banned: dict[str, datetime] = {}  # {user_id: ban_until_time}
-        
         # 确保目录存在
         os.makedirs('mention', exist_ok=True)
         os.makedirs(self.kb_path, exist_ok=True)
@@ -56,6 +48,10 @@ class MentionCog(commands.Cog):
         self.load_settings()
         self.load_threads()
         self.load_usage_stats()
+        self.thread_cooldowns = CooldownManager(self.settings.get('thread_cooldown_seconds', 5))
+        self.user_cooldowns = CooldownManager(self.settings.get('user_cooldown_seconds', 20))
+        self.fail2ban_records = TTLCache[list[datetime]]()
+        self.fail2ban_banned = TTLCache[datetime]()
         
         # 临时文件目录
         self.temp_dir = 'mention_temp'
@@ -229,50 +225,35 @@ class MentionCog(commands.Cog):
             return False
     
     # ===== 冷却检查 =====
+
+    def _get_thread_cooldown_seconds(self, thread_id: str) -> int:
+        thread_config = self.threads.get(thread_id, {})
+        return thread_config.get(
+            'xSettings',
+            {},
+        ).get('thread_cd_seconds', self.settings.get('thread_cooldown_seconds', 5))
     
     def check_thread_cooldown(self, thread_id: str) -> tuple[bool, int]:
         """
         检查子区冷却
         返回: (is_on_cooldown, remaining_seconds)
         """
-        thread_config = self.threads.get(thread_id, {})
-        cooldown_seconds = thread_config.get('xSettings', {}).get('thread_cd_seconds', 
-                                                                   self.settings.get('thread_cooldown_seconds', 5))
-        
-        if thread_id in self.thread_cooldowns:
-            last_used = self.thread_cooldowns[thread_id]
-            elapsed = (datetime.now() - last_used).total_seconds()
-            
-            if elapsed < cooldown_seconds:
-                remaining = int(cooldown_seconds - elapsed)
-                return True, remaining
-        
-        return False, 0
+        return self.thread_cooldowns.check(thread_id)
     
     def update_thread_cooldown(self, thread_id: str) -> None:
         """更新子区冷却时间"""
-        self.thread_cooldowns[thread_id] = datetime.now()
+        self.thread_cooldowns.set_cooldown(thread_id, seconds=self._get_thread_cooldown_seconds(thread_id))
     
     def check_user_cooldown(self, user_id: str) -> tuple[bool, int]:
         """
         检查用户冷却
         返回: (is_on_cooldown, remaining_seconds)
         """
-        cooldown_seconds = self.settings.get('user_cooldown_seconds', 20)
-        
-        if user_id in self.user_cooldowns:
-            last_used = self.user_cooldowns[user_id]
-            elapsed = (datetime.now() - last_used).total_seconds()
-            
-            if elapsed < cooldown_seconds:
-                remaining = int(cooldown_seconds - elapsed)
-                return True, remaining
-        
-        return False, 0
+        return self.user_cooldowns.check(user_id)
     
     def update_user_cooldown(self, user_id: str) -> None:
         """更新用户冷却时间"""
-        self.user_cooldowns[user_id] = datetime.now()
+        self.user_cooldowns.set_cooldown(user_id, seconds=self.settings.get('user_cooldown_seconds', 20))
     
     def check_daily_limit(self, user_id: str) -> tuple[bool, int]:
         """
@@ -312,10 +293,9 @@ class MentionCog(commands.Cog):
         检查用户是否被 fail2ban 封禁
         返回: (is_banned, remaining_minutes)
         """
-        if user_id not in self.fail2ban_banned:
+        ban_until = self.fail2ban_banned.get(user_id)
+        if ban_until is None:
             return False, None
-        
-        ban_until = self.fail2ban_banned[user_id]
         now = datetime.now()
         
         if now < ban_until:
@@ -324,9 +304,8 @@ class MentionCog(commands.Cog):
             return True, int(remaining) + 1
         else:
             # 封禁已过期，清除记录
-            del self.fail2ban_banned[user_id]
-            if user_id in self.fail2ban_records:
-                del self.fail2ban_records[user_id]
+            self.fail2ban_banned.delete(user_id)
+            self.fail2ban_records.delete(user_id)
             return False, None
     
     def record_fail2ban_failure(self, user_id: str) -> bool:
@@ -341,25 +320,21 @@ class MentionCog(commands.Cog):
         min_time_minutes = self.settings.get('fail2ban_min_time_minutes', 2)
         ban_time_minutes = self.settings.get('fail2ban_ban_time_minutes', 60)
         
-        # 初始化用户记录
-        if user_id not in self.fail2ban_records:
-            self.fail2ban_records[user_id] = []
-        
-        # 添加当前失败记录
-        self.fail2ban_records[user_id].append(now)
-        
-        # 清理过期的失败记录（超过 min_time_minutes 的记录）
         cutoff_time = now - timedelta(minutes=min_time_minutes)
-        self.fail2ban_records[user_id] = [
-            fail_time for fail_time in self.fail2ban_records[user_id]
+        fail_records = self.fail2ban_records.get(user_id, [])
+        fail_records = [
+            fail_time for fail_time in fail_records
             if fail_time > cutoff_time
         ]
+        fail_records.append(now)
+        self.fail2ban_records.set(user_id, fail_records, ttl_seconds=min_time_minutes * 60)
         
         # 检查是否达到封禁阈值
-        if len(self.fail2ban_records[user_id]) >= max_tries:
+        if len(fail_records) >= max_tries:
             # 触发封禁
             ban_until = now + timedelta(minutes=ban_time_minutes)
-            self.fail2ban_banned[user_id] = ban_until
+            self.fail2ban_banned.set(user_id, ban_until, ttl_seconds=ban_time_minutes * 60)
+            self.fail2ban_records.delete(user_id)
             logger.warning(f"🚫 用户 {user_id} 触发 fail2ban，封禁至 {ban_until.strftime('%Y-%m-%d %H:%M:%S')}")
             return True
         
@@ -627,24 +602,21 @@ class MentionCog(commands.Cog):
             # 记录开始时间
             start_time = time.time()
             
-            # 流式调用API
-            loop = asyncio.get_event_loop()
-            stream = await loop.run_in_executor(
-                None,
-                lambda: client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    temperature=1.0,
-                    stream=True
-                )
+            # 流式调用 API
+            stream = await client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=1.0,
+                stream=True
             )
             
             # 处理流式响应
             ai_response = ""
-            last_update_time = asyncio.get_event_loop().time()
+            loop = asyncio.get_running_loop()
+            last_update_time = loop.time()
             has_started_output = False
             
-            for chunk in stream:
+            async for chunk in stream:
                 if chunk.choices and len(chunk.choices) > 0:
                     delta = chunk.choices[0].delta
                     if delta.content:
@@ -653,11 +625,11 @@ class MentionCog(commands.Cog):
                         # 第一次收到内容时，标记已开始输出
                         if not has_started_output:
                             has_started_output = True
-                            last_update_time = asyncio.get_event_loop().time()
+                            last_update_time = loop.time()
                         
                         # 根据配置的间隔更新消息
                         stream_interval = self.settings.get('stream_interval', 5)
-                        current_time = asyncio.get_event_loop().time()
+                        current_time = loop.time()
                         if current_time - last_update_time >= stream_interval:
                             try:
                                 # 限制显示长度，避免超过Discord消息限制

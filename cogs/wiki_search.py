@@ -1,6 +1,5 @@
 import asyncio
 import os
-import time
 from collections import OrderedDict
 from urllib.parse import urlencode, urlparse
 
@@ -9,7 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.utils import log_slash_command, safe_defer as _safe_defer
+from cogs.utils import CooldownManager, log_slash_command, safe_defer as _safe_defer
 
 DEFAULT_BASE_URL = "https://naoleiwiki.pages.dev"
 DEFAULT_LIMIT = 5
@@ -169,15 +168,10 @@ def format_search_results(results: list[dict]) -> str:
 class WikiSearch(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.user_cooldowns: dict[int, float] = {}
+        self.user_cooldowns = CooldownManager(USER_COOLDOWN_SECONDS)
 
     def get_remaining_cooldown(self, user_id: int) -> int:
-        last_used_at = self.user_cooldowns.get(user_id)
-        if last_used_at is None:
-            return 0
-        elapsed = time.monotonic() - last_used_at
-        remaining = USER_COOLDOWN_SECONDS - elapsed
-        return max(0, int(remaining) if remaining.is_integer() else int(remaining) + 1)
+        return self.user_cooldowns.get_remaining(user_id)
 
     @app_commands.command(name="问题搜索", description="在脑类知识库中搜索相关内容")
     @app_commands.describe(
@@ -207,7 +201,7 @@ class WikiSearch(commands.Cog):
             log_slash_command(interaction, False)
             return
 
-        self.user_cooldowns[user_id] = time.monotonic()
+        self.user_cooldowns.set_cooldown(user_id)
 
         base_url = normalize_base_url(os.getenv("NAOLEI_WIKI_BASE_URL", DEFAULT_BASE_URL))
         limit = resolve_limit(os.getenv("NAOLEI_WIKI_SEARCH_LIMIT", str(DEFAULT_LIMIT)))

@@ -9,7 +9,7 @@ class ReloadCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    def _reload_bot_data(self) -> None:
+    async def _reload_bot_data(self) -> None:
         """复用主入口的数据库加载逻辑，并在失败时保留旧数据。"""
         loader = getattr(self.bot, "load_database", None)
         if not callable(loader):
@@ -19,7 +19,7 @@ class ReloadCog(commands.Cog):
         old_trusted_users = list(getattr(self.bot, "trusted_users", []))
 
         try:
-            loader(raise_on_error=True)
+            await loader(raise_on_error=True)
         except Exception:
             self.bot.admins = old_admins
             self.bot.trusted_users = old_trusted_users
@@ -30,7 +30,7 @@ class ReloadCog(commands.Cog):
     async def reload_db(self, interaction: discord.Interaction):
         """重新加载 SQLite 数据库文件。"""
         try:
-            self._reload_bot_data()
+            await self._reload_bot_data()
             await interaction.response.send_message("✅ 数据库 `users.db` 已成功重新加载。", ephemeral=True)
             log_slash_command(interaction, True)
             print(f"👑 数据库已由管理员 {interaction.user.name} ({interaction.user.id}) 手动重新加载。")

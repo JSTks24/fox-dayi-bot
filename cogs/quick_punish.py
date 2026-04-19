@@ -13,6 +13,8 @@ import io
 
 from cogs.utils import safe_defer
 
+QUICK_PUNISH_DB_PATH = "quick_punish.db"
+
 # 加载环境变量
 load_dotenv()
 
@@ -316,12 +318,12 @@ class QuickPunishCog(commands.Cog):
         # 双服同步配置（JSON优先，env作为兼容fallback）
         self.sync_config = self._load_sync_config()
 
-        # 数据库初始化与迁移
-        self.init_database()
-
         # 加载xiaozuowen目录中的txt模板（不硬编码文件名）
         self.dm_templates: dict[str, str] = {}
         self._load_dm_templates()
+
+    async def cog_load(self):
+        await asyncio.to_thread(self.init_database)
 
     
     def _parse_role_ids(self, role_str: str) -> list[int]:
@@ -559,60 +561,57 @@ class QuickPunishCog(commands.Cog):
 
     def init_database(self):
         """初始化数据库并执行幂等迁移"""
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
+        with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS quick_punish_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                user_name TEXT NOT NULL,
-                punish_count INTEGER DEFAULT 1,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                original_message_id TEXT,
-                original_message_link TEXT,
-                channel_id TEXT,
-                channel_name TEXT,
-                executor_id TEXT NOT NULL,
-                executor_name TEXT NOT NULL,
-                reason TEXT,
-                removed_roles TEXT,
-                status TEXT DEFAULT 'executed',
-                source_type TEXT DEFAULT 'local',
-                removed_roles_by_guild TEXT DEFAULT '{}',
-                source_guild_id TEXT
-            )
-        ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS quick_punish_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    user_name TEXT NOT NULL,
+                    punish_count INTEGER DEFAULT 1,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    original_message_id TEXT,
+                    original_message_link TEXT,
+                    channel_id TEXT,
+                    channel_name TEXT,
+                    executor_id TEXT NOT NULL,
+                    executor_name TEXT NOT NULL,
+                    reason TEXT,
+                    removed_roles TEXT,
+                    status TEXT DEFAULT 'executed',
+                    source_type TEXT DEFAULT 'local',
+                    removed_roles_by_guild TEXT DEFAULT '{}',
+                    source_guild_id TEXT
+                )
+            ''')
 
-        cursor.execute("PRAGMA table_info(quick_punish_records)")
-        cols = {row[1] for row in cursor.fetchall()}
-        if "source_type" not in cols:
-            cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN source_type TEXT DEFAULT 'local'")
-        if "removed_roles_by_guild" not in cols:
-            cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN removed_roles_by_guild TEXT DEFAULT '{}'")
-        if "source_guild_id" not in cols:
-            cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN source_guild_id TEXT")
+            cursor.execute("PRAGMA table_info(quick_punish_records)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if "source_type" not in cols:
+                cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN source_type TEXT DEFAULT 'local'")
+            if "removed_roles_by_guild" not in cols:
+                cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN removed_roles_by_guild TEXT DEFAULT '{}'")
+            if "source_guild_id" not in cols:
+                cursor.execute("ALTER TABLE quick_punish_records ADD COLUMN source_guild_id TEXT")
 
-        cursor.execute("""
-            UPDATE quick_punish_records
-            SET source_type = 'local'
-            WHERE source_type IS NULL OR TRIM(source_type) = ''
-        """)
-        cursor.execute("""
-            UPDATE quick_punish_records
-            SET source_type = 'sync'
-            WHERE status = 'executed'
-              AND (original_message_link IS NULL OR TRIM(original_message_link) = '')
-              AND (removed_roles IS NULL OR TRIM(removed_roles) = '' OR TRIM(removed_roles) = '[]')
-        """)
-        cursor.execute("""
-            UPDATE quick_punish_records
-            SET removed_roles_by_guild = '{}'
-            WHERE removed_roles_by_guild IS NULL OR TRIM(removed_roles_by_guild) = ''
-        """)
-
-        conn.commit()
-        conn.close()
+            cursor.execute("""
+                UPDATE quick_punish_records
+                SET source_type = 'local'
+                WHERE source_type IS NULL OR TRIM(source_type) = ''
+            """)
+            cursor.execute("""
+                UPDATE quick_punish_records
+                SET source_type = 'sync'
+                WHERE status = 'executed'
+                  AND (original_message_link IS NULL OR TRIM(original_message_link) = '')
+                  AND (removed_roles IS NULL OR TRIM(removed_roles) = '' OR TRIM(removed_roles) = '[]')
+            """)
+            cursor.execute("""
+                UPDATE quick_punish_records
+                SET removed_roles_by_guild = '{}'
+                WHERE removed_roles_by_guild IS NULL OR TRIM(removed_roles_by_guild) = ''
+            """)
 
     def has_permission(self, interaction: discord.Interaction) -> bool:
         """检查用户是否有快速处罚权限（仅校验触发服allowed_roles）"""
@@ -678,41 +677,45 @@ class QuickPunishCog(commands.Cog):
 
     async def get_punish_count(self, user_id: str) -> int:
         """获取用户被处罚次数（executed）"""
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM quick_punish_records WHERE user_id = ? AND status = 'executed'",
-            (user_id,)
-        )
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
+        def _read_count() -> int:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM quick_punish_records WHERE user_id = ? AND status = 'executed'",
+                    (user_id,)
+                )
+                row = cursor.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+
+        return await asyncio.to_thread(_read_count)
 
     async def get_user_punishment_history(self, user_id: str, limit: int = 5) -> list[dict]:
         """获取用户的处罚历史记录"""
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, punish_count, timestamp, reason, executor_name, status, source_type
-            FROM quick_punish_records
-            WHERE user_id = ?
-            ORDER BY timestamp DESC, id DESC
-            LIMIT ?
-        ''', (user_id, limit))
+        def _read_history() -> list[dict]:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, punish_count, timestamp, reason, executor_name, status, source_type
+                    FROM quick_punish_records
+                    WHERE user_id = ?
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT ?
+                ''', (user_id, limit))
 
-        records = []
-        for row in cursor.fetchall():
-            records.append({
-                'id': row[0],
-                'punish_count': row[1],
-                'timestamp': row[2],
-                'reason': row[3],
-                'executor_name': row[4],
-                'status': row[5],
-                'source_type': row[6] or 'local'
-            })
-        conn.close()
-        return records
+                records = []
+                for row in cursor.fetchall():
+                    records.append({
+                        'id': row[0],
+                        'punish_count': row[1],
+                        'timestamp': row[2],
+                        'reason': row[3],
+                        'executor_name': row[4],
+                        'status': row[5],
+                        'source_type': row[6] or 'local'
+                    })
+                return records
+
+        return await asyncio.to_thread(_read_history)
 
     async def send_dm(self, user: discord.User, message_content: str) -> bool:
         """发送私信给用户"""
@@ -758,63 +761,57 @@ class QuickPunishCog(commands.Cog):
                                         removed_roles_by_guild: dict[str, list[int]] | None = None,
                                         source_guild_id: str | None = None) -> tuple[int, int]:
         """记录处罚信息到数据库（使用事务确保原子性）"""
-        conn = sqlite3.connect('quick_punish.db')
-        conn.isolation_level = None  # 自动提交模式
-        cursor = conn.cursor()
+        def _write_record() -> tuple[int, int]:
+            try:
+                with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                    cursor = conn.cursor()
 
-        try:
-            cursor.execute("BEGIN TRANSACTION")
+                    resolved_count = punish_count
+                    if resolved_count == 0:
+                        resolved_count = self._compute_next_punish_count_with_cursor(cursor, str(user.id))
 
-            if punish_count == 0:
-                punish_count = self._compute_next_punish_count_with_cursor(cursor, str(user.id))
+                    message_link = None
+                    msg_id = None
+                    channel_id = None
+                    channel_name = None
+                    if message:
+                        msg_id = str(message.id)
+                        channel_id = str(message.channel.id)
+                        channel_name = getattr(message.channel, "name", None)
+                        if message.guild and message.channel:
+                            message_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
 
-            message_link = None
-            msg_id = None
-            channel_id = None
-            channel_name = None
-            if message:
-                msg_id = str(message.id)
-                channel_id = str(message.channel.id)
-                channel_name = getattr(message.channel, "name", None)
-                if message.guild and message.channel:
-                    message_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}"
+                    rrbg = removed_roles_by_guild or {}
+                    cursor.execute('''
+                        INSERT INTO quick_punish_records
+                        (user_id, user_name, punish_count, timestamp, original_message_id, original_message_link,
+                         channel_id, channel_name, executor_id, executor_name, reason, removed_roles, status,
+                         source_type, removed_roles_by_guild, source_guild_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        str(user.id),
+                        user.name,
+                        resolved_count,
+                        datetime.now().isoformat(),
+                        msg_id,
+                        message_link,
+                        channel_id,
+                        channel_name,
+                        str(executor.id),
+                        executor.name,
+                        reason,
+                        json.dumps(removed_roles),
+                        status,
+                        source_type,
+                        json.dumps(rrbg, ensure_ascii=False),
+                        source_guild_id
+                    ))
+                    return cursor.lastrowid, resolved_count
+            except Exception as e:
+                print(f"数据库事务错误: {e}")
+                raise
 
-            rrbg = removed_roles_by_guild or {}
-            cursor.execute('''
-                INSERT INTO quick_punish_records
-                (user_id, user_name, punish_count, timestamp, original_message_id, original_message_link,
-                 channel_id, channel_name, executor_id, executor_name, reason, removed_roles, status,
-                 source_type, removed_roles_by_guild, source_guild_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                str(user.id),
-                user.name,
-                punish_count,
-                datetime.now().isoformat(),
-                msg_id,
-                message_link,
-                channel_id,
-                channel_name,
-                str(executor.id),
-                executor.name,
-                reason,
-                json.dumps(removed_roles),
-                status,
-                source_type,
-                json.dumps(rrbg, ensure_ascii=False),
-                source_guild_id
-            ))
-
-            record_id = cursor.lastrowid
-            cursor.execute("COMMIT")
-            return record_id, punish_count
-
-        except Exception as e:
-            cursor.execute("ROLLBACK")
-            print(f"数据库事务错误: {e}")
-            raise
-        finally:
-            conn.close()
+        return await asyncio.to_thread(_write_record)
 
     async def send_log_embed(self, channel: discord.abc.Messageable, user: discord.User,
                             executor: discord.User, reason: str, message_link: str,
@@ -1286,34 +1283,34 @@ class QuickPunishCog(commands.Cog):
         count = min(count, max_count)
         count = max(count, 1)
 
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
+        def _read_recent() -> list[dict]:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, user_id, user_name, timestamp, channel_name,
+                           executor_name, reason, removed_roles, status, source_type
+                    FROM quick_punish_records
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT ?
+                ''', (count,))
 
-        cursor.execute('''
-            SELECT id, user_id, user_name, timestamp, channel_name,
-                   executor_name, reason, removed_roles, status, source_type
-            FROM quick_punish_records
-            ORDER BY timestamp DESC, id DESC
-            LIMIT ?
-        ''', (count,))
+                records = []
+                for row in cursor.fetchall():
+                    records.append({
+                        'id': row[0],
+                        'user_id': row[1],
+                        'user_name': row[2],
+                        'timestamp': row[3],
+                        'channel_name': row[4],
+                        'executor_name': row[5],
+                        'reason': row[6],
+                        'removed_roles': self._parse_json_list(row[7]),
+                        'status': row[8],
+                        'source_type': row[9] or 'local'
+                    })
+                return records
 
-        records = []
-        for row in cursor.fetchall():
-            records.append({
-                'id': row[0],
-                'user_id': row[1],
-                'user_name': row[2],
-                'timestamp': row[3],
-                'channel_name': row[4],
-                'executor_name': row[5],
-                'reason': row[6],
-                'removed_roles': self._parse_json_list(row[7]),
-                'status': row[8],
-                'source_type': row[9] or 'local'
-            })
-
-        conn.close()
-        return records
+        return await asyncio.to_thread(_read_recent)
 
     async def format_punishment_records(self, records: list[dict], guild: discord.Guild) -> str:
         """格式化处罚记录为文本"""
@@ -1382,66 +1379,62 @@ class QuickPunishCog(commands.Cog):
 
     async def get_last_punishment_for_user(self, user_id: str) -> dict | None:
         """获取用户最近一次 executed 处罚记录"""
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
+        def _read_last_record() -> dict[str, Any] | None:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, user_id, user_name, timestamp, original_message_id,
+                           original_message_link, channel_id, channel_name,
+                           executor_id, executor_name, reason, removed_roles, status,
+                           source_type, removed_roles_by_guild, source_guild_id
+                    FROM quick_punish_records
+                    WHERE user_id = ? AND status = 'executed'
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 1
+                ''', (user_id,))
+                row = cursor.fetchone()
+                return self._row_to_record(row) if row else None
 
-        cursor.execute('''
-            SELECT id, user_id, user_name, timestamp, original_message_id,
-                   original_message_link, channel_id, channel_name,
-                   executor_id, executor_name, reason, removed_roles, status,
-                   source_type, removed_roles_by_guild, source_guild_id
-            FROM quick_punish_records
-            WHERE user_id = ? AND status = 'executed'
-            ORDER BY timestamp DESC, id DESC
-            LIMIT 1
-        ''', (user_id,))
-
-        row = cursor.fetchone()
-        conn.close()
-
-        if not row:
-            return None
-        return self._row_to_record(row)
+        return await asyncio.to_thread(_read_last_record)
 
     async def get_last_revocable_local_record_for_user(self, user_id: str) -> dict[str, Any] | None:
         """获取最近可撤销（有恢复依据）的 local executed 记录"""
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, user_id, user_name, timestamp, original_message_id,
-                   original_message_link, channel_id, channel_name,
-                   executor_id, executor_name, reason, removed_roles, status,
-                   source_type, removed_roles_by_guild, source_guild_id
-            FROM quick_punish_records
-            WHERE user_id = ? AND status = 'executed' AND COALESCE(source_type, 'local') = 'local'
-            ORDER BY timestamp DESC, id DESC
-            LIMIT 30
-        ''', (user_id,))
-        rows = cursor.fetchall()
-        conn.close()
+        def _read_revocable_record() -> dict[str, Any] | None:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, user_id, user_name, timestamp, original_message_id,
+                           original_message_link, channel_id, channel_name,
+                           executor_id, executor_name, reason, removed_roles, status,
+                           source_type, removed_roles_by_guild, source_guild_id
+                    FROM quick_punish_records
+                    WHERE user_id = ? AND status = 'executed' AND COALESCE(source_type, 'local') = 'local'
+                    ORDER BY timestamp DESC, id DESC
+                    LIMIT 30
+                ''', (user_id,))
+                rows = cursor.fetchall()
 
-        for row in rows:
-            record = self._row_to_record(row)
-            if self._has_restore_basis(record):
-                return record
-        return None
+            for row in rows:
+                record = self._row_to_record(row)
+                if self._has_restore_basis(record):
+                    return record
+            return None
+
+        return await asyncio.to_thread(_read_revocable_record)
 
     async def revoke_punishment(self, record_id: int) -> bool:
         """撤销处罚记录（更新状态为revoked）"""
-        conn = sqlite3.connect('quick_punish.db')
-        cursor = conn.cursor()
+        def _revoke_record() -> bool:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE quick_punish_records
+                    SET status = 'revoked'
+                    WHERE id = ? AND status = 'executed'
+                ''', (record_id,))
+                return cursor.rowcount > 0
 
-        cursor.execute('''
-            UPDATE quick_punish_records
-            SET status = 'revoked'
-            WHERE id = ? AND status = 'executed'
-        ''', (record_id,))
-
-        affected = cursor.rowcount
-        conn.commit()
-        conn.close()
-
-        return affected > 0
+        return await asyncio.to_thread(_revoke_record)
 
     async def restore_user_roles(self, member: discord.Member, roles_to_restore: list[int]) -> tuple[list[int], list[int]]:
         """恢复用户的身份组
