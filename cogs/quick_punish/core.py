@@ -35,7 +35,7 @@ class QuickPunishCoreMixin:
         # 双服同步配置（JSON优先，env作为兼容fallback）
         self.sync_config = self._load_sync_config()
 
-        # 加载xiaozuowen目录中的txt模板（不硬编码文件名）
+        # Load DM templates from the configured template directory.
         self.dm_templates: dict[str, str] = {}
         self._load_dm_templates()
 

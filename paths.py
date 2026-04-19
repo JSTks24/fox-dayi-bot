@@ -36,6 +36,7 @@ ROLE_CONFIGURE_PANELS_FILE = ROLE_CONFIGURE_DIR / "panels.json"
 
 PROMPT_DIR = DATA_DIR / "prompt"
 SUMMARY_PROMPT_DIR = DATA_DIR / "summary_prompt"
+XIAOZUOWEN_DIR = DATA_DIR / "xiaozuowen"
 
 CONFIG_DIR = DATA_DIR / "config"
 ROLE_SYNC_CONFIG_FILE = CONFIG_DIR / "role_sync_config.json"
@@ -58,7 +59,6 @@ PROMPT_LOG_DIR = RUNTIME_DIR / "prompt_log"
 
 RAG_PROMPT_DIR = ROOT_DIR / "rag_prompt"
 UPLOADED_PROMPT_DIR = ROOT_DIR / "uploaded_prompt"
-XIAOZUOWEN_DIR = ROOT_DIR / "xiaozuowen"
 
 PROJECT_DIRS = (
     DATA_DIR,
@@ -72,6 +72,7 @@ PROJECT_DIRS = (
     ROLE_CONFIGURE_DIR,
     PROMPT_DIR,
     SUMMARY_PROMPT_DIR,
+    XIAOZUOWEN_DIR,
     CONFIG_DIR,
     TEMP_DIR,
     APP_TEMP_DIR,
@@ -103,6 +104,7 @@ LEGACY_PATHS = (
     ROOT_DIR / "tagger" / "tagger.db",
     ROOT_DIR / "prompt",
     ROOT_DIR / "summary_prompt",
+    ROOT_DIR / "xiaozuowen",
     ROOT_DIR / "role_configure" / "available_channel.json",
     ROOT_DIR / "role_configure" / "panels.json",
     ROOT_DIR / "role_configure" / "timed_role_members.db",

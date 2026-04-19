@@ -146,7 +146,7 @@ class QuickPunishConfirmView(discord.ui.View):
         self.target_user = target_user
         self.reason = reason
         self.selected_template_filename: str | None = None
-        # 添加下拉选单（动态读取xiaozuowen目录的txt文件）
+        # Add the dropdown from the configured DM template directory.
         self.add_item(TemplateSelect(cog=self.cog))
 
     def _disable_all(self):
@@ -161,7 +161,7 @@ class QuickPunishConfirmView(discord.ui.View):
         # 黄金法则：先defer
         await safe_defer(interaction)
 
-        # 未选择模板时，回退到默认模板 xiaozuowen/default.txt
+        # Fall back to the default DM template when none is selected.
         chosen_template = self.selected_template_filename or "default.txt"
 
         # 执行处罚

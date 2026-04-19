@@ -5,12 +5,14 @@ import os
 from datetime import datetime
 from typing import Any
 import aiofiles
+from paths import XIAOZUOWEN_DIR
+
 
 class QuickPunishNotifyMixin:
     def _load_dm_templates(self):
-        """扫描xiaozuowen目录，加载所有txt模板文件名 -> 路径"""
+        """Scan the DM template directory and load txt template names to paths."""
         self.dm_templates = {}
-        base_dir = 'xiaozuowen'
+        base_dir = os.fspath(XIAOZUOWEN_DIR)
         try:
             for fn in os.listdir(base_dir):
                 fn_lower = fn.lower()
@@ -26,7 +28,7 @@ class QuickPunishNotifyMixin:
             discord.SelectOption(
                 label="默认（第三方API）",
                 value="__none__",
-                description="使用 xiaozuowen/default.txt"
+                description="使用 default.txt"
             )
         ]
         try:
@@ -292,7 +294,7 @@ class QuickPunishNotifyMixin:
         server_role_text = "，".join(server_role_parts) if server_role_parts else "未记录到具体服务器与身份组"
         confirm_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # 使用选择的模板文件（来自xiaozuowen目录）
+        # Use the selected DM template file from the configured template directory.
         try:
             if dm_template_filename and dm_template_filename in getattr(self, "dm_templates", {}):
                 template_path = self.dm_templates[dm_template_filename]

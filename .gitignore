@@ -89,8 +89,7 @@ test_assets/
 # LuaLS
 .luarc.json
 
-# prompt and xiaozuowen
-xiaozuowen/
+# legacy root-only template dirs
 uploaded_prompt/
 rag_prompt/*
 !rag_prompt/.gitkeep

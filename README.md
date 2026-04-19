@@ -56,6 +56,7 @@
 │   ├── mention/            # mention 模块持久化数据
 │   ├── prompt/             # 答疑主提示词目录（ALL.txt 等）
 │   ├── summary_prompt/     # summary 专用提示词目录
+│   ├── xiaozuowen/         # 快速处罚模板目录
 │   └── config/             # 运行期 JSON 配置
 ├── runtime/                # 运行时生成、可重建的数据
 │   ├── temp/               # 临时文件
