@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image
 
@@ -67,6 +68,14 @@ class UtilsTests(unittest.TestCase):
 
         self.assertEqual(interaction.response.defer_calls, [True])
 
+    def test_safe_defer_respects_ephemeral_flag_and_done_state(self):
+        interaction = DummyInteraction()
+
+        asyncio.run(utils.safe_defer(interaction, ephemeral=False))
+        asyncio.run(utils.safe_defer(interaction, ephemeral=True))
+
+        self.assertEqual(interaction.response.defer_calls, [False])
+
     def test_encode_image_to_base64(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             image_path = Path(temp_dir) / "tiny.png"
@@ -76,12 +85,42 @@ class UtilsTests(unittest.TestCase):
 
             self.assertTrue(encoded.startswith("data:image/png;base64,"))
 
+    def test_encode_image_to_base64_falls_back_to_octet_stream(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = Path(temp_dir) / "payload.unknownext"
+            file_path.write_bytes(b"abc123")
+
+            encoded = utils.encode_image_to_base64(str(file_path))
+
+            self.assertTrue(encoded.startswith("data:application/octet-stream;base64,"))
+
     def test_compress_image_keeps_small_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             image_path = Path(temp_dir) / "tiny.jpg"
             Image.new("RGB", (10, 10), color=(255, 255, 255)).save(image_path, format="JPEG")
 
             result = asyncio.run(utils.compress_image(str(image_path), max_size_kb=250))
+
+            self.assertEqual(result, str(image_path))
+
+    def test_compress_image_creates_compressed_file_for_large_image(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "large.bmp"
+            Image.new("RGB", (1024, 1024), color=(255, 255, 255)).save(image_path, format="BMP")
+
+            result = asyncio.run(utils.compress_image(str(image_path), max_size_kb=50))
+
+            self.assertTrue(result.endswith("_compressed.jpg"))
+            self.assertTrue(Path(result).exists())
+            self.assertLess(utils.get_file_size_kb(result), utils.get_file_size_kb(str(image_path)))
+
+    def test_compress_image_returns_original_path_on_exception(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "broken.jpg"
+            image_path.write_bytes(b"not-an-image")
+
+            with mock.patch("cogs.utils.Image.open", side_effect=OSError("broken image")):
+                result = asyncio.run(utils.compress_image(str(image_path), max_size_kb=1))
 
             self.assertEqual(result, str(image_path))
 
@@ -102,6 +141,23 @@ class UtilsTests(unittest.TestCase):
         self.assertIn("123", content)
         self.assertIn("/ping", content)
         self.assertIn("成功", content)
+
+    def test_log_slash_command_writes_failure_status_for_unknown_command(self):
+        interaction = DummyInteraction(user_id=456)
+        interaction.command = None
+
+        old_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            os.chdir(temp_dir)
+            try:
+                utils.log_slash_command(interaction, False)
+                content = Path("logs/log.txt").read_text(encoding="utf-8")
+            finally:
+                os.chdir(old_cwd)
+
+        self.assertIn("456", content)
+        self.assertIn("/Unknown", content)
+        self.assertIn("失败", content)
 
     def test_ttl_cache_expires_entry(self):
         cache = utils.TTLCache[str]()

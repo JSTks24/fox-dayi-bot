@@ -80,7 +80,7 @@ class UnansweredFilter(commands.Cog):
                 reply_count INTEGER,
                 status TEXT,
                 reason TEXT,
-                last_analyzed_at TIMESTAMP
+                last_analyzed_at TEXT
             )''')
 
     def _get_cached_thread_sync(self, thread_id: int):
@@ -103,11 +103,12 @@ class UnansweredFilter(commands.Cog):
         status: str,
         reason: str,
     ):
+        analyzed_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
         with sqlite3.connect(DB_PATH) as conn:
             c = conn.cursor()
             c.execute(
                 "INSERT OR REPLACE INTO thread_cache VALUES (?,?,?,?,?,?)",
-                (thread_id, last_msg_id, reply_count, status, reason, datetime.datetime.now()),
+                (thread_id, last_msg_id, reply_count, status, reason, analyzed_at),
             )
 
     async def _update_thread_cache(self, thread_id: int, last_msg_id: int, reply_count: int, status: str, reason: str):
