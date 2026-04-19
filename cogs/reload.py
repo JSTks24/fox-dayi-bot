@@ -25,13 +25,13 @@ class ReloadCog(commands.Cog):
             self.bot.trusted_users = old_trusted_users
             raise
 
-    @app_commands.command(name="reload-db", description="[仅管理员] 重新加载数据库文件 users.db")
+    @app_commands.command(name="reload-db", description="[仅管理员] 重新加载权限数据库")
     @app_commands.check(check_admin)
     async def reload_db(self, interaction: discord.Interaction):
         """重新加载 SQLite 数据库文件。"""
         try:
             await self._reload_bot_data()
-            await interaction.response.send_message("✅ 数据库 `users.db` 已成功重新加载。", ephemeral=True)
+            await interaction.response.send_message("✅ 权限数据库已成功重新加载。", ephemeral=True)
             log_slash_command(interaction, True)
             print(f"👑 数据库已由管理员 {interaction.user.name} ({interaction.user.id}) 手动重新加载。")
             print(f"👑 新的管理员ID: {self.bot.admins}")

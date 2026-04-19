@@ -9,6 +9,10 @@ from typing import Any
 import aiofiles
 
 from .commands import quick_punish_context, remote_quick_punish_context
+from paths import QUICK_PUNISH_SYNC_CONFIG_FILE, XIAOZUOWEN_DIR
+
+QUICK_PUNISH_SYNC_CONFIG_PATH = str(QUICK_PUNISH_SYNC_CONFIG_FILE)
+PUBLIC_NOTICE_PATH = XIAOZUOWEN_DIR / "public.txt"
 
 class QuickPunishCoreMixin:
     def __init__(self, bot):
@@ -18,7 +22,7 @@ class QuickPunishCoreMixin:
 
         # 从环境变量加载配置
         self.enabled = os.getenv("QUICK_PUNISH_ENABLED", "false").lower() == "true"
-        self.sync_config_path = os.path.join("cogs", "config", "quick_punish_sync.json")
+        self.sync_config_path = QUICK_PUNISH_SYNC_CONFIG_PATH
         self.allowed_roles = self._parse_role_ids(os.getenv("QUICK_PUNISH_ROLES", ""))
         self.remove_roles = self._parse_role_ids(os.getenv("QUICK_PUNISH_REMOVE_ROLES", ""))
         self.log_channel_ids = self._parse_channel_ids(os.getenv("QUICK_PUNISH_LOG_CHANNEL", ""))
@@ -434,7 +438,7 @@ class QuickPunishCoreMixin:
                 )
 
                 try:
-                    async with aiofiles.open('xiaozuowen/public.txt', encoding='utf-8') as f:
+                    async with aiofiles.open(PUBLIC_NOTICE_PATH, encoding='utf-8') as f:
                         public_content = await f.read()
                     await target_message.channel.send(public_content.strip())
                 except Exception as e:

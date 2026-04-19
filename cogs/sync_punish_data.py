@@ -6,7 +6,9 @@ import json
 import sqlite3
 from datetime import datetime
 
-QUICK_PUNISH_DB_PATH = "quick_punish.db"
+from paths import QUICK_PUNISH_DB
+
+QUICK_PUNISH_DB_PATH = str(QUICK_PUNISH_DB)
 
 class SyncPunishDataCog(commands.Cog):
     """监听对接频道的Bot消息以同步处罚记录"""
@@ -29,6 +31,7 @@ class SyncPunishDataCog(commands.Cog):
 
     def init_database(self):
         """幂等建表 + 幂等迁移，保证跨模块顺序加载安全"""
+        os.makedirs(os.path.dirname(QUICK_PUNISH_DB_PATH), exist_ok=True)
         with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute('''

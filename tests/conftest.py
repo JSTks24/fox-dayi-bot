@@ -30,6 +30,7 @@ def temporary_workdir():
 
 
 def create_users_db(db_path: Path, *, admins: tuple[int, ...] = (), trusted_users: tuple[int, ...] = ()) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("CREATE TABLE admins (id TEXT PRIMARY KEY)")

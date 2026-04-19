@@ -6,9 +6,10 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-DB_DIR = 'tagger'
+from paths import TAGGER_DB
 
-DB_PATH = os.path.join(DB_DIR, 'tagger.db')
+DB_DIR = str(TAGGER_DB.parent)
+DB_PATH = str(TAGGER_DB)
 
 RECORD_SELECT_COLUMNS = (
     "id, status, guild_id, target_user_id, message_link, reason, "

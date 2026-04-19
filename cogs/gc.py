@@ -6,6 +6,18 @@ from datetime import datetime, timedelta
 import asyncio
 import logging
 import re
+from paths import APP_TEMP_DIR, CONTEXT_TEMP_DIR, GC_LOG_FILE, MENTION_TEMP_DIR, ROOT_DIR, SAVE_DIR
+
+PROJECT_ROOT = os.fspath(ROOT_DIR)
+TEMP_CLEANUP_DIRS = [
+    os.fspath(APP_TEMP_DIR.relative_to(ROOT_DIR)),
+    os.fspath(CONTEXT_TEMP_DIR.relative_to(ROOT_DIR)),
+    os.fspath(MENTION_TEMP_DIR.relative_to(ROOT_DIR)),
+    "runtime/logs",
+    os.fspath(SAVE_DIR.relative_to(ROOT_DIR)),
+]
+LEGACY_CLEANUP_DIRS = ["jmtktemp", "temp", "shieldlog", "thread_temp", "agent_save"]
+GC_LOG_PATH = os.fspath(GC_LOG_FILE)
 
 class AutoGarbageCollector(commands.Cog):
     def __init__(self, bot):
@@ -23,7 +35,7 @@ class AutoGarbageCollector(commands.Cog):
         self.archive_folder = os.getenv("AUTO_ARCHIVE_GC_FOLDER", "thread_save")  # 默认存档文件夹
         
         # 要清理的临时文件夹列表
-        self.cleanup_folders = ["jmtktemp", "app_temp", "temp", "logs", "shieldlog", "thread_temp","app_save","agent_save"]
+        self.cleanup_folders = [*TEMP_CLEANUP_DIRS, *LEGACY_CLEANUP_DIRS]
         
         self.first_run_time = None
         self.archive_first_run_time = None
@@ -34,7 +46,8 @@ class AutoGarbageCollector(commands.Cog):
         
         # 如果还没有处理器，添加一个
         if not self.logger.handlers:
-            handler = logging.FileHandler('logs/gc.log', encoding='utf-8')
+            os.makedirs(os.path.dirname(GC_LOG_PATH), exist_ok=True)
+            handler = logging.FileHandler(GC_LOG_PATH, encoding='utf-8')
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
@@ -106,7 +119,10 @@ class AutoGarbageCollector(commands.Cog):
         
         for folder_name in self.cleanup_folders:
             try:
-                folder_path = os.path.join(os.getcwd(), folder_name)
+                if os.path.isabs(folder_name):
+                    folder_path = folder_name
+                else:
+                    folder_path = os.path.join(PROJECT_ROOT, folder_name)
                 
                 # 检查文件夹是否存在
                 if not os.path.exists(folder_path):
@@ -204,7 +220,10 @@ class AutoGarbageCollector(commands.Cog):
         cutoff_time = datetime.now() - timedelta(hours=self.archive_grace_hours)
         
         try:
-            folder_path = os.path.join(os.getcwd(), self.archive_folder)
+            if os.path.isabs(self.archive_folder):
+                folder_path = self.archive_folder
+            else:
+                folder_path = os.path.join(PROJECT_ROOT, self.archive_folder)
             
             # 检查文件夹是否存在
             if not os.path.exists(folder_path):

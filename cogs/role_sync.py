@@ -14,6 +14,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs.utils import check_admin, log_slash_command
+from paths import ROLE_SYNC_CONFIG_FILE, USERS_DB
+
+ROLE_SYNC_CONFIG_PATH = str(ROLE_SYNC_CONFIG_FILE)
+USERS_DB_PATH = str(USERS_DB)
 
 
 class RoleSyncSkipError(RuntimeError):
@@ -28,7 +32,7 @@ class RoleSyncCog(commands.Cog):
         self.config: dict[str, Any] | None = None
         self._sync_task: asyncio.Task | None = None
         self._sync_lock = asyncio.Lock()
-        self._config_path = "cogs/config/role_sync_config.json"
+        self._config_path = ROLE_SYNC_CONFIG_PATH
         self._config_write_lock = Lock()
         self._load_config()
 
@@ -116,7 +120,8 @@ class RoleSyncCog(commands.Cog):
             raise
 
     def _load_trusted_users_sync(self) -> list[int]:
-        with sqlite3.connect("users.db") as conn:
+        os.makedirs(os.path.dirname(USERS_DB_PATH), exist_ok=True)
+        with sqlite3.connect(USERS_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS trusted_users (id TEXT PRIMARY KEY)")
             cursor.execute("SELECT id FROM trusted_users")
@@ -131,7 +136,8 @@ class RoleSyncCog(commands.Cog):
             raise
 
     def _sync_trusted_users_sync(self, target_user_ids: set[str]) -> tuple[list[str], int]:
-        with sqlite3.connect("users.db") as conn:
+        os.makedirs(os.path.dirname(USERS_DB_PATH), exist_ok=True)
+        with sqlite3.connect(USERS_DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("CREATE TABLE IF NOT EXISTS trusted_users (id TEXT PRIMARY KEY)")
             cursor.execute("SELECT id FROM trusted_users")

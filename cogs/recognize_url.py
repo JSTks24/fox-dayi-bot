@@ -9,6 +9,19 @@ from datetime import datetime
 from threading import Lock
 from urllib.parse import urlparse
 from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image
+from paths import (
+    API_TABLE_BAD_FILE,
+    API_TABLE_GOOD_FILE,
+    API_TABLE_HISTORY_FILE,
+    API_TABLE_PROMPT_FILE,
+    APP_TEMP_DIR,
+)
+
+API_TABLE_PROMPT_PATH = os.fspath(API_TABLE_PROMPT_FILE)
+API_TABLE_GOOD_PATH = os.fspath(API_TABLE_GOOD_FILE)
+API_TABLE_BAD_PATH = os.fspath(API_TABLE_BAD_FILE)
+API_TABLE_HISTORY_PATH = os.fspath(API_TABLE_HISTORY_FILE)
+APP_TEMP_PATH = os.fspath(APP_TEMP_DIR)
 
 # --- Cog 主体 ---
 
@@ -81,12 +94,12 @@ class RecognizeURL(commands.Cog):
         """组合完整提示词"""
         try:
             # 读取基础提示词
-            with open('api_table/prompt.txt', encoding='utf-8') as f:
+            with open(API_TABLE_PROMPT_PATH, encoding='utf-8') as f:
                 base_prompt = f.read().strip()
             
             # 读取good.json和bad.json
-            good_data = self._load_json('api_table/good.json')
-            bad_data = self._load_json('api_table/bad.json')
+            good_data = self._load_json(API_TABLE_GOOD_PATH)
+            bad_data = self._load_json(API_TABLE_BAD_PATH)
             
             # 组合提示词
             full_prompt = base_prompt + "\n\n"
@@ -148,7 +161,7 @@ class RecognizeURL(commands.Cog):
             success: 操作是否成功
         """
         try:
-            history_file = 'api_table/history.txt'
+            history_file = API_TABLE_HISTORY_PATH
             
             # 确保目录存在
             os.makedirs(os.path.dirname(history_file), exist_ok=True)
@@ -258,7 +271,7 @@ class RecognizeURL(commands.Cog):
         # --- 文件处理 ---
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         base_filename = f"{timestamp}_{user_id}_url_check"
-        temp_dir = 'app_temp'
+        temp_dir = APP_TEMP_PATH
         image_path = None
         
         try:
@@ -405,21 +418,21 @@ class RecognizeURL(commands.Cog):
         try:
             if operation == 'delete':
                 # 删除操作：从两个文件中查找并删除
-                good_data = self._load_json('api_table/good.json')
-                bad_data = self._load_json('api_table/bad.json')
+                good_data = self._load_json(API_TABLE_GOOD_PATH)
+                bad_data = self._load_json(API_TABLE_BAD_PATH)
                 
                 deleted_from = []
                 
                 # 从good.json中删除
                 if 'good' in good_data and normalized_url in good_data['good']:
                     del good_data['good'][normalized_url]
-                    self._save_json('api_table/good.json', good_data)
+                    self._save_json(API_TABLE_GOOD_PATH, good_data)
                     deleted_from.append('好API列表')
                 
                 # 从bad.json中删除
                 if 'bad' in bad_data and normalized_url in bad_data['bad']:
                     del bad_data['bad'][normalized_url]
-                    self._save_json('api_table/bad.json', bad_data)
+                    self._save_json(API_TABLE_BAD_PATH, bad_data)
                     deleted_from.append('坏API列表')
                 
                 if deleted_from:
@@ -451,7 +464,7 @@ class RecognizeURL(commands.Cog):
             
             elif operation == 'add_good':
                 # 添加到好API
-                good_data = self._load_json('api_table/good.json')
+                good_data = self._load_json(API_TABLE_GOOD_PATH)
                 
                 if 'good' not in good_data:
                     good_data['good'] = {}
@@ -460,7 +473,7 @@ class RecognizeURL(commands.Cog):
                 value = [名称 or "", 描述 or ""]
                 good_data['good'][normalized_url] = value
                 
-                if self._save_json('api_table/good.json', good_data):
+                if self._save_json(API_TABLE_GOOD_PATH, good_data):
                     # 记录操作历史
                     self._log_operation_to_history(
                         user=interaction.user,
@@ -493,7 +506,7 @@ class RecognizeURL(commands.Cog):
             
             elif operation == 'add_bad':
                 # 添加到坏API
-                bad_data = self._load_json('api_table/bad.json')
+                bad_data = self._load_json(API_TABLE_BAD_PATH)
                 
                 if 'bad' not in bad_data:
                     bad_data['bad'] = {}
@@ -502,7 +515,7 @@ class RecognizeURL(commands.Cog):
                 value = [名称 or "", 描述 or ""]
                 bad_data['bad'][normalized_url] = value
                 
-                if self._save_json('api_table/bad.json', bad_data):
+                if self._save_json(API_TABLE_BAD_PATH, bad_data):
                     # 记录操作历史
                     self._log_operation_to_history(
                         user=interaction.user,
@@ -558,8 +571,8 @@ class RecognizeURL(commands.Cog):
         
         try:
             # 加载数据
-            good_data = self._load_json('api_table/good.json')
-            bad_data = self._load_json('api_table/bad.json')
+            good_data = self._load_json(API_TABLE_GOOD_PATH)
+            bad_data = self._load_json(API_TABLE_BAD_PATH)
             
             # 查询
             result = None

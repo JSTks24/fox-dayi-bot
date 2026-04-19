@@ -11,6 +11,8 @@ import io
 from typing import Any
 from collections.abc import Sequence
 
+from paths import REVIEWER_DB
+
 # ================= 配置映射 =================
 # 新手开帖 论坛频道 ID
 try:
@@ -39,8 +41,8 @@ except (TypeError, ValueError):
 # 优先使用通用模型，如果没有则回退到图片描述模型
 AI_MODEL_NAME = os.getenv("OPENAI_MODEL") or os.getenv("IMAGE_DESCRIBE_MODEL")
 RESOLVED_TAG_NAME = os.getenv("RESOLVED_TAG_NAME", "已解决")
-DB_DIR = "reviewer"
-DB_PATH = os.path.join(DB_DIR, "unanswered.db")
+DB_DIR = str(REVIEWER_DB.parent)
+DB_PATH = str(REVIEWER_DB)
 
 class UnansweredFilter(commands.Cog):
     def __init__(self, bot: commands.Bot):

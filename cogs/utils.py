@@ -11,6 +11,7 @@ from typing import Generic, Hashable, TypeVar
 
 import discord
 from PIL import Image
+from paths import COMMAND_LOG_FILE
 
 T = TypeVar("T")
 
@@ -213,9 +214,9 @@ async def compress_image(image_path: str, max_size_kb: int = 250) -> str:
 # ── 日志记录 ──────────────────────────────────────────────
 
 def log_slash_command(interaction: discord.Interaction, success: bool):
-    """记录斜杠命令的使用情况到 logs/log.txt。"""
-    log_dir = "logs"
-    log_file = os.path.join(log_dir, "log.txt")
+    """记录斜杠命令的使用情况到 runtime/logs/log.txt。"""
+    log_file = os.fspath(COMMAND_LOG_FILE)
+    log_dir = os.path.dirname(log_file)
 
     if not os.path.exists(log_dir):
         try:

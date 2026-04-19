@@ -9,6 +9,7 @@ import logging
 from .commands import BroadcastCommandsMixin
 from .scheduler import BroadcastSchedulerMixin
 from .storage import BroadcastStorageMixin
+from paths import BROADCAST_STATS_FILE, BROADCAST_THREADS_FILE
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -24,13 +25,13 @@ class BroadcastCog(
         self.config: dict[str, dict] = {}
         self.stats: dict[str, dict] = {}
         self.active_tasks: dict[str, tasks.Loop] = {}
-        self.config_path = 'broadcast/broadcast_threads.json'
-        self.stats_path = 'broadcast/broadcast_stats.json'
+        self.config_path = str(BROADCAST_THREADS_FILE)
+        self.stats_path = str(BROADCAST_STATS_FILE)
         self.lock = asyncio.Lock()  # 防止并发修改
         self.tz_shanghai = pytz.timezone('Asia/Shanghai')
         
         # 确保目录存在
-        os.makedirs('broadcast', exist_ok=True)
+        os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
         
         # 加载配置和状态
         self.load_config()

@@ -1,5 +1,4 @@
 import asyncio
-import os
 import tempfile
 import time
 import unittest
@@ -127,16 +126,16 @@ class UtilsTests(unittest.TestCase):
     def test_log_slash_command_writes_file(self):
         interaction = DummyInteraction(user_id=123, command_name="ping")
 
-        old_cwd = os.getcwd()
         with tempfile.TemporaryDirectory() as temp_dir:
-            os.chdir(temp_dir)
+            original_log_file = utils.COMMAND_LOG_FILE
+            utils.COMMAND_LOG_FILE = Path(temp_dir) / "runtime" / "logs" / "log.txt"
             try:
                 utils.log_slash_command(interaction, True)
-                log_path = Path("logs/log.txt")
+                log_path = Path(utils.COMMAND_LOG_FILE)
                 self.assertTrue(log_path.exists())
                 content = log_path.read_text(encoding="utf-8")
             finally:
-                os.chdir(old_cwd)
+                utils.COMMAND_LOG_FILE = original_log_file
 
         self.assertIn("123", content)
         self.assertIn("/ping", content)
@@ -146,14 +145,14 @@ class UtilsTests(unittest.TestCase):
         interaction = DummyInteraction(user_id=456)
         interaction.command = None
 
-        old_cwd = os.getcwd()
         with tempfile.TemporaryDirectory() as temp_dir:
-            os.chdir(temp_dir)
+            original_log_file = utils.COMMAND_LOG_FILE
+            utils.COMMAND_LOG_FILE = Path(temp_dir) / "runtime" / "logs" / "log.txt"
             try:
                 utils.log_slash_command(interaction, False)
-                content = Path("logs/log.txt").read_text(encoding="utf-8")
+                content = Path(utils.COMMAND_LOG_FILE).read_text(encoding="utf-8")
             finally:
-                os.chdir(old_cwd)
+                utils.COMMAND_LOG_FILE = original_log_file
 
         self.assertIn("456", content)
         self.assertIn("/Unknown", content)

@@ -11,15 +11,19 @@ class RoleSyncDatabaseTests(unittest.TestCase):
         cog = object.__new__(role_sync.RoleSyncCog)
 
         with temporary_workdir() as temp_dir:
-            db_path = Path(temp_dir) / "users.db"
+            original_path = role_sync.USERS_DB_PATH
+            role_sync.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
+            db_path = Path(role_sync.USERS_DB_PATH)
+            try:
+                self.assertEqual(cog._load_trusted_users_sync(), [])
 
-            self.assertEqual(cog._load_trusted_users_sync(), [])
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute("INSERT INTO trusted_users (id) VALUES ('7')")
+                    conn.execute("INSERT INTO trusted_users (id) VALUES ('9')")
 
-            with sqlite3.connect(db_path) as conn:
-                conn.execute("INSERT INTO trusted_users (id) VALUES ('7')")
-                conn.execute("INSERT INTO trusted_users (id) VALUES ('9')")
-
-            result = cog._load_trusted_users_sync()
+                result = cog._load_trusted_users_sync()
+            finally:
+                role_sync.USERS_DB_PATH = original_path
 
         self.assertEqual(sorted(result), [7, 9])
         self.assertTrue(all(isinstance(user_id, int) for user_id in result))
@@ -28,16 +32,22 @@ class RoleSyncDatabaseTests(unittest.TestCase):
         cog = object.__new__(role_sync.RoleSyncCog)
 
         with temporary_workdir() as temp_dir:
-            db_path = Path(temp_dir) / "users.db"
-            with sqlite3.connect(db_path) as conn:
-                conn.execute("CREATE TABLE trusted_users (id TEXT PRIMARY KEY)")
-                conn.execute("INSERT INTO trusted_users (id) VALUES ('2')")
+            original_path = role_sync.USERS_DB_PATH
+            role_sync.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
+            db_path = Path(role_sync.USERS_DB_PATH)
+            try:
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute("CREATE TABLE trusted_users (id TEXT PRIMARY KEY)")
+                    conn.execute("INSERT INTO trusted_users (id) VALUES ('2')")
 
-            new_ids, existed_count = cog._sync_trusted_users_sync({"10", "3", "2"})
-            second_new_ids, second_existed_count = cog._sync_trusted_users_sync({"10", "3", "2"})
+                new_ids, existed_count = cog._sync_trusted_users_sync({"10", "3", "2"})
+                second_new_ids, second_existed_count = cog._sync_trusted_users_sync({"10", "3", "2"})
 
-            with sqlite3.connect(db_path) as conn:
-                stored_ids = sorted(row[0] for row in conn.execute("SELECT id FROM trusted_users"))
+                with sqlite3.connect(db_path) as conn:
+                    stored_ids = sorted(row[0] for row in conn.execute("SELECT id FROM trusted_users"))
+            finally:
+                role_sync.USERS_DB_PATH = original_path
 
         self.assertEqual(new_ids, ["3", "10"])
         self.assertEqual(existed_count, 1)
@@ -53,8 +63,8 @@ class ReviewerCacheDatabaseTests(unittest.TestCase):
         with temporary_workdir() as temp_dir:
             original_dir = pending_questions_reviewer.DB_DIR
             original_path = pending_questions_reviewer.DB_PATH
-            pending_questions_reviewer.DB_DIR = str(Path(temp_dir) / "reviewer")
-            pending_questions_reviewer.DB_PATH = str(Path(temp_dir) / "reviewer" / "unanswered.db")
+            pending_questions_reviewer.DB_DIR = str(Path(temp_dir) / "data" / "db")
+            pending_questions_reviewer.DB_PATH = str(Path(temp_dir) / "data" / "db" / "unanswered.db")
             try:
                 cog._ensure_db_ready()
                 self.assertIsNone(cog._get_cached_thread_sync(1))

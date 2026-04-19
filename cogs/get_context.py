@@ -7,10 +7,12 @@ from datetime import datetime
 import asyncio
 import logging
 from cogs.utils import check_admin, log_slash_command, safe_defer as _safe_defer
+from paths import CONTEXT_TEMP_DIR
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+CONTEXT_TEMP_PATH = os.fspath(CONTEXT_TEMP_DIR)
 
 class GetContextCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -126,7 +128,7 @@ class GetContextCog(commands.Cog):
         返回文件路径
         """
         # 确保context_temp文件夹存在
-        temp_dir = 'context_temp'
+        temp_dir = CONTEXT_TEMP_PATH
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir)
         

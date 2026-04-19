@@ -54,26 +54,31 @@ class GetContextFileHelperTests(unittest.TestCase):
     def test_temp_file_helpers_round_trip(self):
         cog = object.__new__(get_context.GetContextCog)
 
-        with temporary_workdir():
-            filepath = Path(
-                cog._create_temp_file(
-                    [
-                        {
-                            "username": "Tester",
-                            "content": "hello",
-                            "timestamp": None,
-                            "author_id": 1,
-                        }
-                    ],
-                    42,
+        with temporary_workdir() as temp_dir:
+            original_temp_path = get_context.CONTEXT_TEMP_PATH
+            get_context.CONTEXT_TEMP_PATH = str(Path(temp_dir) / "runtime" / "temp" / "context")
+            try:
+                filepath = Path(
+                    cog._create_temp_file(
+                        [
+                            {
+                                "username": "Tester",
+                                "content": "hello",
+                                "timestamp": None,
+                                "author_id": 1,
+                            }
+                        ],
+                        42,
+                    )
                 )
-            )
 
-            content = cog._read_file_bytes(str(filepath)).decode("utf-8")
-            self.assertIn("Tester: hello", content)
+                content = cog._read_file_bytes(str(filepath)).decode("utf-8")
+                self.assertIn("Tester: hello", content)
 
-            cog._delete_file_if_exists(str(filepath))
-            self.assertFalse(filepath.exists())
+                cog._delete_file_if_exists(str(filepath))
+                self.assertFalse(filepath.exists())
+            finally:
+                get_context.CONTEXT_TEMP_PATH = original_temp_path
 
 
 class RoleSyncConfigTests(unittest.TestCase):

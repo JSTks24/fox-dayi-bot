@@ -9,9 +9,13 @@ import traceback
 import tiktoken
 import time
 from cogs.utils import compress_image, encode_image_to_base64, get_file_size_kb
+from paths import PROMPT_DIR
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+DEFAULT_KB_PROMPT_PATH = os.fspath(PROMPT_DIR / "ALL.txt")
+RAW_KB_PROMPT_PATH = os.fspath(PROMPT_DIR / "raw.txt")
 
 class MentionAIMixin:
     async def generate_ai_response(self, message: discord.Message, thread_id: str):
@@ -426,9 +430,9 @@ class MentionAIMixin:
         
         # 选择基础提示词
         if use_default_kb:
-            base_prompt_path = 'prompt/ALL.txt'
+            base_prompt_path = DEFAULT_KB_PROMPT_PATH
         else:
-            base_prompt_path = 'prompt/raw.txt'
+            base_prompt_path = RAW_KB_PROMPT_PATH
         
         # 加载基础提示词
         try:

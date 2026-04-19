@@ -6,8 +6,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs.utils import check_admin, log_slash_command
+from paths import USERS_DB
 
 PERMISSION_GROUPS = ("admins", "trusted_users")
+USERS_DB_PATH = str(USERS_DB)
 
 
 class UsersDatabaseCog(commands.Cog):
@@ -30,7 +32,7 @@ class UsersDatabaseCog(commands.Cog):
         operator_id: int,
         operator_name: str,
     ) -> tuple[list[str], list[str], list[str]]:
-        with sqlite3.connect("users.db") as conn:
+        with sqlite3.connect(USERS_DB_PATH) as conn:
             cursor = conn.cursor()
 
             if action == "remove" and group == "admins":

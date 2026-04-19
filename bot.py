@@ -14,6 +14,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 from cogs.utils import log_slash_command
+from paths import USERS_DB
 
 load_dotenv()
 
@@ -108,6 +109,7 @@ class ParallelLimitError(app_commands.AppCommandError):
 
 bot.parallel_limit_error_cls = ParallelLimitError
 NON_EXTENSION_MODULES = {"__init__.py", "utils.py"}
+USERS_DB_PATH = str(USERS_DB)
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -116,7 +118,7 @@ def is_admin(interaction: discord.Interaction) -> bool:
 
 
 def _load_database_sync() -> tuple[list[int], list[int]]:
-    with sqlite3.connect("users.db") as conn:
+    with sqlite3.connect(USERS_DB_PATH) as conn:
         cursor = conn.cursor()
 
         cursor.execute("SELECT id FROM admins")
@@ -129,7 +131,7 @@ def _load_database_sync() -> tuple[list[int], list[int]]:
 
 
 async def load_database(*, raise_on_error: bool = False) -> None:
-    """从 users.db 加载管理员与受信任用户。"""
+    """从用户权限数据库加载管理员与受信任用户。"""
     try:
         admins, trusted_users = await asyncio.to_thread(_load_database_sync)
     except sqlite3.Error as exc:

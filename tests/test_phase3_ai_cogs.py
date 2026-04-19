@@ -64,7 +64,7 @@ class AppDayiPhase3Tests(unittest.TestCase):
 
     def test_archive_prompt_uses_asyncio_to_thread(self):
         turns = [{"role": "user", "message": mock.Mock(content="hello", attachments=[]), "is_current": True, "image_paths": []}]
-        write_mock = mock.Mock(return_value="app_save/mock.txt")
+        write_mock = mock.Mock(return_value="runtime/save/mock.txt")
         self.cog._write_prompt_archive = write_mock
         captured = {}
 

@@ -12,6 +12,7 @@ import openai
 from discord import app_commands
 from discord.ext import commands
 from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image, get_file_size_kb
+from paths import APP_TEMP_DIR, BANLIST_FILE, PROMPT_DIR, SAVE_DIR
 
 from .stream import DEFAULT_SYSTEM_PROMPT, MAX_IMAGE_ATTACHMENTS, PUBLIC_ALLOWED_MENTIONS, REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT, STATUS_PROCESSING_IMAGES, STATUS_RECEIVED, STATUS_REQUESTING_AI, STATUS_RESOLVING_CONTEXT, STREAM_TIMEOUT_SECONDS, PublicStreamReply
 
@@ -90,7 +91,7 @@ class AppDayiCoreMixin:
         await self._acknowledge_public_result(interaction, "ℹ️ 错误信息已公开发送到频道。")
 
     def _get_banlist_path(self) -> str:
-        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "banlist.json")
+        return os.fspath(BANLIST_FILE)
 
     def _load_banlist_data(self) -> dict[str, Any]:
         banlist_path = self._get_banlist_path()
@@ -292,7 +293,7 @@ class AppDayiCoreMixin:
 
     def _write_prompt_archive(self, user_id: int, turns: list[dict[str, Any]], system_prompt: str) -> str:
         try:
-            save_dir = "app_save"
+            save_dir = os.fspath(SAVE_DIR)
             os.makedirs(save_dir, exist_ok=True)
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -417,7 +418,7 @@ class AppDayiCoreMixin:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_filename = f"{timestamp}_{user_id}"
-        temp_dir = "app_temp"
+        temp_dir = os.fspath(APP_TEMP_DIR)
         temp_files: set[str] = set()
         conversation_turns: list[dict[str, Any]] = []
         history_pairs_newest_first: list[dict[str, Any]] = []
@@ -647,7 +648,7 @@ class AppDayiCoreMixin:
             self._cleanup_temp_files(temp_files=temp_files)
 
     def _get_default_prompt_path(self) -> str:
-        return "prompt/ALL.txt"
+        return os.fspath(PROMPT_DIR / "ALL.txt")
 
     def _load_default_prompt(self) -> str:
         """Load the default knowledge-base prompt with mtime-based invalidation."""

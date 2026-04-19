@@ -20,6 +20,16 @@ env/
 Thumbs.db
 
 # --- Project Specific Data (运行时生成的动态文件) ---
+# 统一路径管理后的数据目录
+data/**
+!data/.gitkeep
+!data/**/.gitkeep
+
+# 统一路径管理后的运行时目录
+runtime/**
+!runtime/.gitkeep
+!runtime/**/.gitkeep
+
 # 忽略所有临时文件目录
 temp/
 

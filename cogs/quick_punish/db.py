@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import discord
 import asyncio
+import os
 import sqlite3
 from datetime import datetime
 import json
 from typing import Any
 
-QUICK_PUNISH_DB_PATH = "quick_punish.db"
+from paths import QUICK_PUNISH_DB
+
+QUICK_PUNISH_DB_PATH = str(QUICK_PUNISH_DB)
 
 class QuickPunishDBMixin:
     def init_database(self):
         """初始化数据库并执行幂等迁移"""
+        os.makedirs(os.path.dirname(QUICK_PUNISH_DB_PATH), exist_ok=True)
         with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
             cursor = conn.cursor()
 

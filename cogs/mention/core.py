@@ -7,6 +7,15 @@ from datetime import datetime, timedelta
 import logging
 import traceback
 from cogs.utils import CooldownManager, TTLCache
+from paths import (
+    MENTION_KB_DIR,
+    MENTION_SETTINGS_FILE,
+    MENTION_TEMP_DIR,
+    MENTION_THREAD_METADATA_DIR,
+    MENTION_THREADS_FILE,
+    MENTION_USAGE_STATS_FILE,
+    PROMPT_LOG_DIR,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -18,15 +27,15 @@ class MentionCoreMixin:
         self.threads: dict = {}
         self.usage_stats: dict = {}
         
-        self.settings_path = 'mention/settings.json'
-        self.threads_path = 'mention/threads.json'
-        self.usage_stats_path = 'mention/usage_stats.json'
-        self.kb_path = 'mention/kb'
-        self.prompt_log_path = 'mention/promptLog'
-        self.thread_metadata_path = 'mention/threadsMetadata'
-        
+        self.settings_path = str(MENTION_SETTINGS_FILE)
+        self.threads_path = str(MENTION_THREADS_FILE)
+        self.usage_stats_path = str(MENTION_USAGE_STATS_FILE)
+        self.kb_path = str(MENTION_KB_DIR)
+        self.prompt_log_path = str(PROMPT_LOG_DIR)
+        self.thread_metadata_path = str(MENTION_THREAD_METADATA_DIR)
+
         # 确保目录存在
-        os.makedirs('mention', exist_ok=True)
+        os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
         os.makedirs(self.kb_path, exist_ok=True)
         os.makedirs(self.prompt_log_path, exist_ok=True)
         os.makedirs(self.thread_metadata_path, exist_ok=True)
@@ -41,7 +50,7 @@ class MentionCoreMixin:
         self.fail2ban_banned = TTLCache[datetime]()
         
         # 临时文件目录
-        self.temp_dir = 'mention_temp'
+        self.temp_dir = str(MENTION_TEMP_DIR)
         os.makedirs(self.temp_dir, exist_ok=True)
         
         logger.info("MentionCog 已初始化")

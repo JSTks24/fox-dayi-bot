@@ -50,10 +50,18 @@
 │   ├── mention.py          # 提及自动回复
 │   ├── summary.py          # 消息总结
 │   └── ...
+├── data/                   # 持久化数据（数据库、JSON 状态、业务配置）
+│   ├── db/                 # SQLite 数据库
+│   ├── api_table/          # URL 黑白名单与提示词
+│   ├── mention/            # mention 模块持久化数据
+│   └── config/             # 运行期 JSON 配置
+├── runtime/                # 运行时生成、可重建的数据
+│   ├── temp/               # 临时文件
+│   ├── save/               # 提示词归档
+│   ├── logs/               # 运行日志
+│   └── rag_data/           # RAG 向量数据
 ├── prompt/                 # 答疑主提示词目录（ALL.txt 等）
 ├── summary_prompt/         # summary 专用提示词目录
-├── app_temp/               # 运行时临时文件
-├── app_save/               # 提示词归档
 ├── bot.py                  # 机器人主入口
 └── requirements.txt        # Python 依赖
 ```

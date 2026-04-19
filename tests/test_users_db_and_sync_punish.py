@@ -11,28 +11,33 @@ class UsersDatabaseCogTests(unittest.TestCase):
         cog = users_db.UsersDatabaseCog(DummyBot())
 
         with temporary_workdir() as temp_dir:
-            db_path = Path(temp_dir) / "users.db"
-            create_users_db(db_path, admins=(1,), trusted_users=(2,))
+            original_path = users_db.USERS_DB_PATH
+            users_db.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
+            db_path = Path(users_db.USERS_DB_PATH)
+            try:
+                create_users_db(db_path, admins=(1,), trusted_users=(2,))
 
-            success, already_exists, not_exists = cog._apply_permission_changes_sync(
-                group="trusted_users",
-                action="add",
-                target_user_ids=[2, 3],
-                operator_id=1,
-                operator_name="admin",
-            )
-            self.assertEqual((success, already_exists, not_exists), (["3"], ["2"], []))
+                success, already_exists, not_exists = cog._apply_permission_changes_sync(
+                    group="trusted_users",
+                    action="add",
+                    target_user_ids=[2, 3],
+                    operator_id=1,
+                    operator_name="admin",
+                )
+                self.assertEqual((success, already_exists, not_exists), (["3"], ["2"], []))
 
-            success, already_exists, not_exists = cog._apply_permission_changes_sync(
-                group="trusted_users",
-                action="remove",
-                target_user_ids=[3, 9],
-                operator_id=1,
-                operator_name="admin",
-            )
+                success, already_exists, not_exists = cog._apply_permission_changes_sync(
+                    group="trusted_users",
+                    action="remove",
+                    target_user_ids=[3, 9],
+                    operator_id=1,
+                    operator_name="admin",
+                )
 
-            with sqlite3.connect(db_path) as conn:
-                trusted_users_ids = sorted(row[0] for row in conn.execute("SELECT id FROM trusted_users"))
+                with sqlite3.connect(db_path) as conn:
+                    trusted_users_ids = sorted(row[0] for row in conn.execute("SELECT id FROM trusted_users"))
+            finally:
+                users_db.USERS_DB_PATH = original_path
 
         self.assertEqual((success, already_exists, not_exists), (["3"], [], ["9"]))
         self.assertEqual(trusted_users_ids, ["2"])
@@ -41,17 +46,21 @@ class UsersDatabaseCogTests(unittest.TestCase):
         cog = users_db.UsersDatabaseCog(DummyBot())
 
         with temporary_workdir() as temp_dir:
-            db_path = Path(temp_dir) / "users.db"
-            create_users_db(db_path, admins=(1, 2))
+            original_path = users_db.USERS_DB_PATH
+            users_db.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
+            try:
+                create_users_db(Path(users_db.USERS_DB_PATH), admins=(1, 2))
 
-            with self.assertRaises(PermissionError):
-                cog._apply_permission_changes_sync(
-                    group="admins",
-                    action="remove",
-                    target_user_ids=[2],
-                    operator_id=1,
-                    operator_name="admin",
-                )
+                with self.assertRaises(PermissionError):
+                    cog._apply_permission_changes_sync(
+                        group="admins",
+                        action="remove",
+                        target_user_ids=[2],
+                        operator_id=1,
+                        operator_name="admin",
+                    )
+            finally:
+                users_db.USERS_DB_PATH = original_path
 
 
 class SyncPunishDataTests(unittest.TestCase):
@@ -60,7 +69,7 @@ class SyncPunishDataTests(unittest.TestCase):
 
         with temporary_workdir() as temp_dir:
             original_path = sync_punish_data.QUICK_PUNISH_DB_PATH
-            sync_punish_data.QUICK_PUNISH_DB_PATH = str(Path(temp_dir) / "quick_punish.db")
+            sync_punish_data.QUICK_PUNISH_DB_PATH = str(Path(temp_dir) / "data" / "db" / "quick_punish.db")
             try:
                 cog.init_database()
 
@@ -85,7 +94,7 @@ class SyncPunishDataTests(unittest.TestCase):
 
         with temporary_workdir() as temp_dir:
             original_path = sync_punish_data.QUICK_PUNISH_DB_PATH
-            sync_punish_data.QUICK_PUNISH_DB_PATH = str(Path(temp_dir) / "quick_punish.db")
+            sync_punish_data.QUICK_PUNISH_DB_PATH = str(Path(temp_dir) / "data" / "db" / "quick_punish.db")
             try:
                 cog.init_database()
                 with sqlite3.connect(sync_punish_data.QUICK_PUNISH_DB_PATH) as conn:
