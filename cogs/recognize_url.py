@@ -4,7 +4,10 @@ from discord import app_commands
 import os
 import asyncio
 import json
+import tempfile
 from datetime import datetime
+from threading import Lock
+from urllib.parse import urlparse
 from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image
 
 # --- Cog 主体 ---
@@ -13,6 +16,7 @@ class RecognizeURL(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.cooldowns = CooldownManager(30)
+        self._json_write_lock = Lock()
         
         # 将上下文菜单命令添加到 bot 的 tree 中
         self.ctx_menu = app_commands.ContextMenu(
@@ -46,12 +50,31 @@ class RecognizeURL(commands.Cog):
     
     def _save_json(self, file_path: str, data: dict) -> bool:
         """保存JSON文件"""
+        temp_path = None
         try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
+            directory = os.path.dirname(file_path) or '.'
+            os.makedirs(directory, exist_ok=True)
+
+            with self._json_write_lock:
+                with tempfile.NamedTemporaryFile(
+                    'w',
+                    encoding='utf-8',
+                    dir=directory,
+                    delete=False,
+                    suffix='.tmp'
+                ) as f:
+                    json.dump(data, f, ensure_ascii=False, indent=4)
+                    temp_path = f.name
+
+                os.replace(temp_path, file_path)
             return True
         except Exception as e:
             print(f"❌ 保存JSON文件失败 {file_path}: {e}")
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
             return False
     
     def _build_prompt(self) -> str:
@@ -78,14 +101,31 @@ class RecognizeURL(commands.Cog):
     
     def _normalize_url(self, url: str) -> str:
         """标准化URL格式"""
-        # 移除协议前缀
-        url = url.replace('https://', '').replace('http://', '')
-        # 移除尾部斜杠
-        url = url.rstrip('/')
-        # 移除端口号（如果有）
-        if ':' in url:
-            url = url.split(':')[0]
-        return url.lower()
+        raw_url = (url or '').strip()
+        if not raw_url:
+            return ''
+
+        parsed = urlparse(raw_url if '://' in raw_url else f'//{raw_url}')
+        hostname = (parsed.hostname or '').lower()
+
+        if not hostname:
+            fallback = parsed.path.strip().rstrip('/')
+            return fallback.lower()
+
+        normalized = hostname
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+        default_ports = {'http': 80, 'https': 443}
+        if port and port != default_ports.get(parsed.scheme):
+            normalized += f':{port}'
+
+        path = (parsed.path or '').rstrip('/')
+        if path and path != '/':
+            normalized += path
+
+        return normalized
     
     def _log_operation_to_history(
         self,

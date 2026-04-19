@@ -154,6 +154,24 @@ class GuildGuardCog(commands.Cog):
 
         return "\n".join(lines)
 
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild):
+        should_ids, invalid_items = self._parse_should_guild_ids()
+        if not should_ids:
+            print("[GuildGuard] BOT_SHOULD_IN_GUILD_IDS 未配置或为空，跳过自动退服。")
+            return
+
+        if guild.id in should_ids:
+            return
+
+        try:
+            await guild.leave()
+            print(f"[GuildGuard] 已自动退出异常服务器: {guild.name} ({guild.id})")
+            if invalid_items:
+                print(f"[GuildGuard] 白名单中存在无法解析的项: {', '.join(invalid_items[:10])}")
+        except Exception as e:
+            print(f"[GuildGuard] 自动退出异常服务器失败: {guild.name} ({guild.id}) -> {e}")
+
     async def execute_leave_unexpected_guilds(self, current_guild_id: int | None = None) -> dict:
         should_ids, invalid_items = self._parse_should_guild_ids()
         if not should_ids:

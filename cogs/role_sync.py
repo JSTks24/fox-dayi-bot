@@ -4,7 +4,9 @@ import asyncio
 import json
 import os
 import sqlite3
+import tempfile
 from datetime import datetime
+from threading import Lock
 from typing import Any
 
 import discord
@@ -27,6 +29,7 @@ class RoleSyncCog(commands.Cog):
         self._sync_task: asyncio.Task | None = None
         self._sync_lock = asyncio.Lock()
         self._config_path = "cogs/config/role_sync_config.json"
+        self._config_write_lock = Lock()
         self._load_config()
 
     def _now_iso(self) -> str:
@@ -88,12 +91,28 @@ class RoleSyncCog(commands.Cog):
         if self.config is None:
             return
 
+        temp_path = None
         try:
-            os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
-            with open(self._config_path, "w", encoding="utf-8") as file:
-                json.dump(self.config, file, ensure_ascii=False, indent=2)
+            directory = os.path.dirname(self._config_path) or "."
+            os.makedirs(directory, exist_ok=True)
+            with self._config_write_lock:
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    encoding="utf-8",
+                    dir=directory,
+                    delete=False,
+                    suffix=".tmp",
+                ) as file:
+                    json.dump(self.config, file, ensure_ascii=False, indent=2)
+                    temp_path = file.name
+                os.replace(temp_path, self._config_path)
         except Exception as error:
             print(f"[role_sync] 保存配置失败: {error}")
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
             raise
 
     def _load_trusted_users_sync(self) -> list[int]:

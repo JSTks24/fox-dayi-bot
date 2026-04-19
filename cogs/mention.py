@@ -20,6 +20,8 @@ from cogs.utils import CooldownManager, TTLCache, compress_image, encode_image_t
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+THREAD_METADATA_CACHE_TTL_SECONDS = 24 * 60 * 60
+
 class MentionCog(commands.Cog):
     """提及反应 Cog，支持自动回复和知识库"""
     
@@ -35,8 +37,6 @@ class MentionCog(commands.Cog):
         self.kb_path = 'mention/kb'
         self.prompt_log_path = 'mention/promptLog'
         self.thread_metadata_path = 'mention/threadsMetadata'
-        
-        self.lock = asyncio.Lock()  # 防止并发修改
         
         # 确保目录存在
         os.makedirs('mention', exist_ok=True)
@@ -936,24 +936,33 @@ class MentionCog(commands.Cog):
             格式化的子区信息字符串
         """
         metadata_file = os.path.join(self.thread_metadata_path, f"{thread_id}.txt")
-        
-        # 如果已有缓存，直接读取
+        stale_metadata = ""
+
         if os.path.exists(metadata_file):
             try:
                 with open(metadata_file, encoding='utf-8') as f:
-                    metadata = f.read().strip()
-                    if metadata:
+                    cached_metadata = f.read().strip()
+
+                if cached_metadata:
+                    cache_age_seconds = max(0.0, time.time() - os.path.getmtime(metadata_file))
+                    if cache_age_seconds < THREAD_METADATA_CACHE_TTL_SECONDS:
                         logger.info(f"从缓存加载子区 {thread_id} 的元数据")
-                        return metadata
-            except Exception as e:
+                        return cached_metadata
+
+                    stale_metadata = cached_metadata
+                    logger.info(f"子区 {thread_id} 的元数据缓存已过期，准备刷新")
+            except OSError as e:
                 logger.warning(f"读取子区元数据缓存失败: {e}")
         
         # 没有缓存，从Discord获取
         try:
             channel = self.bot.get_channel(int(thread_id))
             if not channel:
-                logger.warning(f"无法获取子区 {thread_id} 的频道对象")
-                return ""
+                try:
+                    channel = await self.bot.fetch_channel(int(thread_id))
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+                    logger.warning(f"无法获取子区 {thread_id} 的频道对象: {e}")
+                    return stale_metadata
             
             # 获取子区名字
             thread_name = channel.name if hasattr(channel, 'name') else "未知子区"
@@ -988,14 +997,14 @@ class MentionCog(commands.Cog):
                 with open(metadata_file, 'w', encoding='utf-8') as f:
                     f.write(metadata)
                 logger.info(f"已缓存子区 {thread_id} 的元数据")
-            except Exception as e:
+            except OSError as e:
                 logger.warning(f"保存子区元数据缓存失败: {e}")
             
             return metadata
             
         except Exception as e:
             logger.error(f"获取子区元数据失败: {e}")
-            return ""
+            return stale_metadata
     
     async def build_prompt(self, thread_id: str, context_messages: list[str]) -> str:
         """

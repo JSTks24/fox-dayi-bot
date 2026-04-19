@@ -15,25 +15,25 @@ from collections.abc import Sequence
 # 新手开帖 论坛频道 ID
 try:
     TARGET_FORUM_ID = int(os.getenv("TARGET_FORUM_ID", 0))
-except Exception:
+except (TypeError, ValueError):
     TARGET_FORUM_ID = 0
 
 # 新手答疑 汇报频道 ID
 try:
     REPORT_CHANNEL_ID = int(os.getenv("REPORT_CHANNEL_ID", 0))
-except Exception:
+except (TypeError, ValueError):
     REPORT_CHANNEL_ID = 0
 
 # 已解决标签 ID
 try:
     RESOLVED_TAG_ID = int(os.getenv("RESOLVED_TAG_ID", 0))
-except Exception:
+except (TypeError, ValueError):
     RESOLVED_TAG_ID = 0
 
 # 待解决标签 ID
 try:
     UNSOLVED_TAG_ID = int(os.getenv("UNSOLVED_TAG_ID", 0))
-except Exception:
+except (TypeError, ValueError):
     UNSOLVED_TAG_ID = 0
 
 # 优先使用通用模型，如果没有则回退到图片描述模型
@@ -188,7 +188,7 @@ class UnansweredFilter(commands.Cog):
                     return parsed
                 if isinstance(parsed, list):
                     return {"results": parsed}
-            except Exception:
+            except json.JSONDecodeError:
                 pass
 
             # 兼容 AI 返回 Python 风格字典（单引号）
@@ -198,7 +198,7 @@ class UnansweredFilter(commands.Cog):
                     return parsed_py
                 if isinstance(parsed_py, list):
                     return {"results": parsed_py}
-            except Exception:
+            except (SyntaxError, ValueError):
                 pass
 
         preview = raw_text[:500].replace("\n", "\\n")
@@ -251,21 +251,21 @@ class UnansweredFilter(commands.Cog):
         """拉取帖子，计算真实回复数，构建发送给AI的数据包"""
         if not TARGET_FORUM_ID:
             print("❌ [Unanswered] 未配置 TARGET_CHANNEL_OR_THREAD")
-            return None, [], []
+            return None, None, [], []
 
         forum_channel = self.bot.get_channel(TARGET_FORUM_ID)
         if not forum_channel:
             # 尝试 fetch
             try:
                 forum_channel = await self.bot.fetch_channel(TARGET_FORUM_ID)
-            except Exception:
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 print(f"❌ [Unanswered] 无法获取论坛频道 {TARGET_FORUM_ID}")
-                return None, [], []
+                return None, None, [], []
 
         # 检查是否为论坛频道并获取标签对象
         if not isinstance(forum_channel, discord.ForumChannel):
             print(f"❌ [Unanswered] 频道 {TARGET_FORUM_ID} 不是论坛频道，无法使用标签功能")
-            return None, [], []
+            return None, None, [], []
 
         resolved_tag = next((t for t in forum_channel.available_tags if t.id == RESOLVED_TAG_ID), None)
         if not resolved_tag:
@@ -287,7 +287,7 @@ class UnansweredFilter(commands.Cog):
             async for t in forum_channel.archived_threads(limit=50):
                 if t.created_at >= target_date:
                     all_threads.append(t)
-        except Exception as e:
+        except discord.HTTPException as e:
             print(f"⚠️ [Unanswered] 获取归档帖子失败: {e}")
 
         print(f"🔍 [Unanswered] 开始扫描 {len(all_threads)} 个帖子...")
@@ -303,7 +303,7 @@ class UnansweredFilter(commands.Cog):
             # 抓取最近 10 条，足够判断是否有人回复
             try:
                 recent_msgs = [m async for m in thread.history(limit=10, oldest_first=False)]
-            except Exception as e:
+            except discord.HTTPException as e:
                 print(f"⚠️ 无法读取帖子 {thread.id} 历史: {e}")
                 continue
 
@@ -346,7 +346,7 @@ class UnansweredFilter(commands.Cog):
                     async for m in thread.history(limit=1, oldest_first=True):
                         starter_msg = m
                         break
-                except Exception:
+                except discord.HTTPException:
                     pass
 
             if not starter_msg:
@@ -729,7 +729,7 @@ class UnansweredFilter(commands.Cog):
                     t_id_raw = res.get("id")
                     try:
                         t_id = int(t_id_raw)
-                    except Exception:
+                    except (TypeError, ValueError):
                         continue
                     ai_results_map[t_id] = res
 

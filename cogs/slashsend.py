@@ -19,6 +19,22 @@ class SlashSend(commands.Cog):
             return int(match.group(1)), int(match.group(2)), int(match.group(3))
         return None, None, None
 
+    async def resolve_target_channel(self, guild: discord.Guild, channel_id: int):
+        """Resolve channels with an API fallback so thread IDs also work."""
+        target_channel = guild.get_channel(channel_id)
+        if target_channel:
+            return target_channel
+
+        try:
+            fetched_channel = await self.bot.fetch_channel(channel_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
+        channel_guild = getattr(fetched_channel, "guild", None)
+        if channel_guild is not None and channel_guild.id != guild.id:
+            return None
+        return fetched_channel
+
     @app_commands.command(name='send', description='[仅管理员] 发送消息或回复指定消息')
     @app_commands.describe(
         content='要发送的文字内容',
@@ -78,7 +94,7 @@ class SlashSend(commands.Cog):
                 return
 
             # 获取目标频道
-            target_channel = target_guild.get_channel(channel_id)
+            target_channel = await self.resolve_target_channel(target_guild, channel_id)
             if not target_channel:
                 await interaction.followup.send('❌ 无法找到指定的频道。', ephemeral=True)
                 log_slash_command(interaction, False)
@@ -124,7 +140,7 @@ class SlashSend(commands.Cog):
             await interaction.followup.send('❌ 执行命令时发生未知错误。', ephemeral=True)
             log_slash_command(interaction, False)
 
-    @app_commands.command(name='hzhv', description='[仅管理员] 删除机器人消息')
+    @app_commands.command(name='撤回', description='[仅管理员] 删除机器人消息')
     @app_commands.describe(
         message_link='（可选）要删除的消息链接，留空则删除机器人在当前频道的最后一条消息'
     )
@@ -201,7 +217,7 @@ class SlashSend(commands.Cog):
                 return
 
             # 获取目标频道
-            target_channel = target_guild.get_channel(channel_id)
+            target_channel = await self.resolve_target_channel(target_guild, channel_id)
             if not target_channel:
                 await interaction.followup.send('❌ 无法找到指定的频道。', ephemeral=True)
                 log_slash_command(interaction, False)
@@ -250,7 +266,7 @@ class SlashSend(commands.Cog):
             await interaction.followup.send(f'❌ 删除消息时发生错误: {e}', ephemeral=True)
             log_slash_command(interaction, False)
         except Exception as e:
-            print(f"[错误] /hzhv 命令执行时发生错误: {e}")
+            print(f"[错误] /撤回 命令执行时发生错误: {e}")
             await interaction.followup.send('❌ 执行命令时发生未知错误。', ephemeral=True)
             log_slash_command(interaction, False)
 

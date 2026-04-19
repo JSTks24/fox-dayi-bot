@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os
+import io
 from datetime import datetime
 import asyncio
 import logging
@@ -150,6 +151,14 @@ class GetContextCog(commands.Cog):
         except Exception as e:
             logger.error(f"创建临时文件失败: {e}")
             raise
+
+    def _read_file_bytes(self, filepath: str) -> bytes:
+        with open(filepath, 'rb') as f:
+            return f.read()
+
+    def _delete_file_if_exists(self, filepath: str) -> None:
+        if os.path.exists(filepath):
+            os.remove(filepath)
     
     async def _cleanup_file(self, filepath: str, delay: int = 300):
         """
@@ -157,9 +166,8 @@ class GetContextCog(commands.Cog):
         """
         try:
             await asyncio.sleep(delay)
-            if os.path.exists(filepath):
-                os.remove(filepath)
-                logger.info(f"临时文件已清理: {filepath}")
+            await asyncio.to_thread(self._delete_file_if_exists, filepath)
+            logger.info(f"临时文件已清理: {filepath}")
         except Exception as e:
             logger.error(f"清理临时文件失败: {e}")
     
@@ -238,24 +246,27 @@ class GetContextCog(commands.Cog):
                 return
             
             # 创建临时文件
-            filepath = self._create_temp_file(messages, interaction.user.id)
+            filepath = await asyncio.to_thread(self._create_temp_file, messages, interaction.user.id)
             
             # 发送文件
-            with open(filepath, 'rb') as f:
-                file = discord.File(f, filename=f"子区内容_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-                
-                # 构建成功消息
-                success_msg = f"✅ 成功收集了 {len(messages)} 条消息！\n"
-                if filter_info:
-                    success_msg += f"🔍 应用过滤条件: {', '.join(filter_info)}\n"
-                success_msg += "📁 文件将在5分钟后自动删除。"
-                
-                await interaction.followup.send(
-                    success_msg,
-                    file=file,
-                    ephemeral=True
-                )
-                log_slash_command(interaction, True)
+            file_bytes = await asyncio.to_thread(self._read_file_bytes, filepath)
+            file = discord.File(
+                io.BytesIO(file_bytes),
+                filename=f"子区内容_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            )
+
+            # 构建成功消息
+            success_msg = f"✅ 成功收集了 {len(messages)} 条消息！\n"
+            if filter_info:
+                success_msg += f"🔍 应用过滤条件: {', '.join(filter_info)}\n"
+            success_msg += "📁 文件将在5分钟后自动删除。"
+
+            await interaction.followup.send(
+                success_msg,
+                file=file,
+                ephemeral=True
+            )
+            log_slash_command(interaction, True)
             
             # 异步清理文件
             asyncio.create_task(self._cleanup_file(filepath))

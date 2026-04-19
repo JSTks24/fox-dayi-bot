@@ -334,6 +334,9 @@ class AppDayi(commands.Cog):
         self.message_cooldowns = CooldownManager(30)
         self.cooldown_duration = 30
         self._default_prompt_cache: str | None = None
+        self._default_prompt_cache_mtime: float | None = None
+        self._banlist_cache: dict[str, Any] | None = None
+        self._banlist_cache_mtime: float | None = None
 
         self.ctx_menu = app_commands.ContextMenu(
             name="快速答疑",
@@ -402,21 +405,43 @@ class AppDayi(commands.Cog):
 
         await self._acknowledge_public_result(interaction, "ℹ️ 错误信息已公开发送到频道。")
 
-    def _get_active_ban_entry(self, target_user_id: str) -> dict[str, Any] | None:
-        banlist_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "banlist.json")
+    def _get_banlist_path(self) -> str:
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "banlist.json")
+
+    def _load_banlist_data(self) -> dict[str, Any]:
+        banlist_path = self._get_banlist_path()
+        try:
+            current_mtime = os.path.getmtime(banlist_path)
+        except FileNotFoundError:
+            print("⚠️ banlist.json 文件不存在，跳过封禁检查")
+            self._banlist_cache = {}
+            self._banlist_cache_mtime = None
+            return self._banlist_cache
+        except Exception as e:
+            print(f"❌ 读取 banlist.json 修改时间失败: {e}")
+            return self._banlist_cache or {}
+
+        if self._banlist_cache is not None and current_mtime == self._banlist_cache_mtime:
+            return self._banlist_cache
+
         try:
             with open(banlist_path, encoding="utf-8") as f:
                 banlist_data = json.load(f)
-        except FileNotFoundError:
-            print("⚠️ banlist.json 文件不存在，跳过封禁检查")
-            return None
         except json.JSONDecodeError as e:
             print(f"❌ 解析 banlist.json 失败: {e}")
-            return None
+            self._banlist_cache = {}
+            self._banlist_cache_mtime = current_mtime
+            return self._banlist_cache
         except Exception as e:
             print(f"❌ 封禁检查出错: {e}")
-            return None
+            return self._banlist_cache or {}
 
+        self._banlist_cache = banlist_data if isinstance(banlist_data, dict) else {}
+        self._banlist_cache_mtime = current_mtime
+        return self._banlist_cache
+
+    def _get_active_ban_entry(self, target_user_id: str) -> dict[str, Any] | None:
+        banlist_data = self._load_banlist_data()
         current_timestamp = datetime.now().timestamp()
         for ban_entry in banlist_data.get("banlist", []):
             if ban_entry.get("ID") != target_user_id:
@@ -789,7 +814,36 @@ class AppDayi(commands.Cog):
 
         return messages
 
-    def _archive_prompt(self, user_id: int, turns: list[dict[str, Any]], system_prompt: str) -> None:
+    def _build_archive_prompt_content(self, turns: list[dict[str, Any]], system_prompt: str) -> str:
+        sections = ["=== 系统提示词 ===\n", system_prompt]
+        history_user_index = 0
+        history_ai_index = 0
+
+        for turn in turns:
+            if turn.get("role") == "assistant":
+                history_ai_index += 1
+                sections.append(f"\n\n=== 历史 AI 回复 #{history_ai_index} ===\n")
+                sections.append(turn.get("text", ""))
+                continue
+
+            label = "当前用户消息" if turn.get("is_current") else "历史用户消息"
+            if not turn.get("is_current"):
+                history_user_index += 1
+                label = f"{label} #{history_user_index}"
+
+            sections.append(f"\n\n=== {label} ===\n")
+            sections.append(self._build_user_turn_prompt_text(turn))
+
+            included_image_count = len(turn.get("image_paths", []))
+            omitted_image_count = self._safe_int(turn.get("omitted_image_count"), 0)
+            if included_image_count:
+                sections.append(f"\n[已附带图片 {included_image_count} 张]")
+            if omitted_image_count:
+                sections.append(f"\n[未附带原图 {omitted_image_count} 张]")
+
+        return "".join(sections)
+
+    def _write_prompt_archive(self, user_id: int, turns: list[dict[str, Any]], system_prompt: str) -> str:
         try:
             save_dir = "app_save"
             os.makedirs(save_dir, exist_ok=True)
@@ -797,38 +851,20 @@ class AppDayi(commands.Cog):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             save_filename = f"{timestamp}_{user_id}.txt"
             save_path = os.path.join(save_dir, save_filename)
-
-            history_user_index = 0
-            history_ai_index = 0
+            archive_content = self._build_archive_prompt_content(turns, system_prompt)
             with open(save_path, "w", encoding="utf-8") as f:
-                f.write("=== 系统提示词 ===\n")
-                f.write(system_prompt)
-
-                for turn in turns:
-                    if turn.get("role") == "assistant":
-                        history_ai_index += 1
-                        f.write(f"\n\n=== 历史 AI 回复 #{history_ai_index} ===\n")
-                        f.write(turn.get("text", ""))
-                        continue
-
-                    label = "当前用户消息" if turn.get("is_current") else "历史用户消息"
-                    if not turn.get("is_current"):
-                        history_user_index += 1
-                        label = f"{label} #{history_user_index}"
-
-                    f.write(f"\n\n=== {label} ===\n")
-                    f.write(self._build_user_turn_prompt_text(turn))
-
-                    included_image_count = len(turn.get("image_paths", []))
-                    omitted_image_count = self._safe_int(turn.get("omitted_image_count"), 0)
-                    if included_image_count:
-                        f.write(f"\n[已附带图片 {included_image_count} 张]")
-                    if omitted_image_count:
-                        f.write(f"\n[未附带原图 {omitted_image_count} 张]")
-
-            print(f"✅ 已存档提示词到 {save_path}")
+                f.write(archive_content)
+            return save_path
         except Exception as e:
             print(f"❌ 存档提示词失败: {e}")
+            raise
+
+    async def _archive_prompt(self, user_id: int, turns: list[dict[str, Any]], system_prompt: str) -> None:
+        try:
+            save_path = await asyncio.to_thread(self._write_prompt_archive, user_id, turns, system_prompt)
+            print(f"✅ 已存档提示词到 {save_path}")
+        except Exception:
+            return
 
     async def _stream_ai_response(
         self,
@@ -1049,7 +1085,7 @@ class AppDayi(commands.Cog):
 
             system_prompt = self._load_default_prompt()
             messages = self._build_openai_messages(conversation_turns, system_prompt)
-            self._archive_prompt(user_id, conversation_turns, system_prompt)
+            await self._archive_prompt(user_id, conversation_turns, system_prompt)
 
             total_image_paths = [
                 image_path
@@ -1163,12 +1199,23 @@ class AppDayi(commands.Cog):
 
             self._cleanup_temp_files(temp_files=temp_files)
 
+    def _get_default_prompt_path(self) -> str:
+        return "prompt/ALL.txt"
+
     def _load_default_prompt(self) -> str:
-        """加载默认的完整知识库提示词，并进行缓存。"""
-        if self._default_prompt_cache is not None:
+        """Load the default knowledge-base prompt with mtime-based invalidation."""
+        prompt_file = self._get_default_prompt_path()
+        try:
+            current_mtime = os.path.getmtime(prompt_file)
+        except FileNotFoundError:
+            current_mtime = None
+        except Exception as e:
+            print(f"⚠️ 读取知识库文件修改时间失败，回退到缓存或默认提示词: {e}")
+            return self._default_prompt_cache or DEFAULT_SYSTEM_PROMPT
+
+        if self._default_prompt_cache is not None and current_mtime == self._default_prompt_cache_mtime:
             return self._default_prompt_cache
 
-        prompt_file = "prompt/ALL.txt"
         try:
             with open(prompt_file, encoding="utf-8") as f:
                 system_prompt = f.read().strip()
@@ -1180,6 +1227,7 @@ class AppDayi(commands.Cog):
             system_prompt = DEFAULT_SYSTEM_PROMPT
 
         self._default_prompt_cache = system_prompt
+        self._default_prompt_cache_mtime = current_mtime
         return system_prompt
 
 

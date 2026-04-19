@@ -38,12 +38,12 @@ class BroadcastCog(commands.Cog):
         # 加载配置和状态
         self.load_config()
         self.load_stats()
-        
-        # 启动自动保存任务
-        self.auto_save.start()
-        
-        # 启动所有活动任务
-        self.bot.loop.create_task(self.start_all_tasks())
+
+    async def cog_load(self) -> None:
+        """Start background tasks after the cog is fully loaded."""
+        if not self.auto_save.is_running():
+            self.auto_save.start()
+        await self.start_all_tasks()
     
     def cog_unload(self):
         """Cog 卸载时的清理工作"""
@@ -232,38 +232,54 @@ class BroadcastCog(commands.Cog):
         @tasks.loop(minutes=interval_minutes)
         async def interval_task():
             await self.execute_task(task_name, task_config)
+
+        @interval_task.before_loop
+        async def before_interval_task():
+            await self.bot.wait_until_ready()
+            delay = self.get_interval_first_delay_seconds(task_config)
+            if delay > 0:
+                logger.info(f"任务 {task_name} 将在 {delay:.0f} 秒后首次执行")
+                await asyncio.sleep(delay)
         
         # 启动任务
         interval_task.start()
         self.active_tasks[task_name] = interval_task
-        
-        # 如果有上次发送时间，计算延迟
+
+    def get_interval_first_delay_seconds(
+        self,
+        task_config: dict,
+        now: datetime | None = None,
+    ) -> float:
+        """Calculate the delay before the first interval run."""
         task_id = task_config['id']
-        if task_id in self.stats:
-            last_time_str = self.stats[task_id].get('last_time_sent', '')
-            if last_time_str:
-                try:
-                    # 解析上次发送时间
-                    now = datetime.now(self.tz_shanghai)
-                    last_hour = int(last_time_str[:2])
-                    last_minute = int(last_time_str[2:4])
-                    last_second = int(last_time_str[4:6])
-                    
-                    last_time = now.replace(hour=last_hour, minute=last_minute, second=last_second)
-                    
-                    # 如果上次发送时间比现在晚，说明是昨天
-                    if last_time > now:
-                        last_time = last_time - timedelta(days=1)
-                    
-                    # 计算下次执行时间
-                    next_time = last_time + timedelta(minutes=interval_minutes)
-                    
-                    if next_time > now:
-                        delay = (next_time - now).total_seconds()
-                        logger.info(f"任务 {task_name} 将在 {delay:.0f} 秒后首次执行")
-                        await asyncio.sleep(delay)
-                except Exception as e:
-                    logger.error(f"解析上次发送时间失败: {e}")
+        last_time_str = self.stats.get(task_id, {}).get('last_time_sent', '')
+        if not last_time_str:
+            return 0.0
+
+        try:
+            current_time = now or datetime.now(self.tz_shanghai)
+            last_hour = int(last_time_str[:2])
+            last_minute = int(last_time_str[2:4])
+            last_second = int(last_time_str[4:6])
+            last_time = current_time.replace(
+                hour=last_hour,
+                minute=last_minute,
+                second=last_second,
+                microsecond=0,
+            )
+
+            if last_time > current_time:
+                last_time -= timedelta(days=1)
+
+            interval_minutes = int(task_config['INTERVAL_MINUTES'])
+            next_time = last_time + timedelta(minutes=interval_minutes)
+            if next_time <= current_time:
+                return 0.0
+
+            return (next_time - current_time).total_seconds()
+        except Exception as e:
+            logger.error(f"解析上次发送时间失败: {e}")
+            return 0.0
     
     async def create_daily_task(self, task_name: str, task_config: dict) -> None:
         """创建定时模式任务"""
@@ -272,7 +288,7 @@ class BroadcastCog(commands.Cog):
         
         try:
             tz = pytz.timezone(timezone_str)
-        except:
+        except Exception:
             logger.warning(f"无效的时区 {timezone_str}，使用默认时区 Asia/Shanghai")
             tz = self.tz_shanghai
         
@@ -328,22 +344,15 @@ class BroadcastCog(commands.Cog):
                 for target_id in targets:
                     try:
                         channel_id = int(target_id)
-                        channel = self.bot.get_channel(channel_id)
-                        
-                        if channel:
-                            await channel.send(content)
+                        target = self.bot.get_channel(channel_id)
+
+                        if target:
+                            await target.send(content)
                             success_count += 1
                             logger.info(f"任务 {task_name} 成功发送到频道 {channel_id}")
                         else:
-                            # 尝试作为线程获取
-                            thread = self.bot.get_channel(channel_id)
-                            if thread:
-                                await thread.send(content)
-                                success_count += 1
-                                logger.info(f"任务 {task_name} 成功发送到线程 {channel_id}")
-                            else:
-                                failed_targets.append(target_id)
-                                logger.warning(f"找不到频道/线程: {channel_id}")
+                            failed_targets.append(target_id)
+                            logger.warning(f"找不到频道/线程: {channel_id}")
                         
                         # 轻微延迟避免限流
                         if len(targets) > 1:
@@ -444,15 +453,24 @@ class BroadcastCog(commands.Cog):
     async def before_auto_save(self):
         """等待 bot 准备就绪"""
         await self.bot.wait_until_ready()
-    
-    # 管理命令（仅限管理员）
-    @commands.command(name='broadcast_reload')
-    @commands.has_permissions(administrator=True)
-    async def reload_broadcast(self, ctx):
+
+    def _has_admin_permission(self, interaction: discord.Interaction) -> bool:
+        member = interaction.user
+        return isinstance(member, discord.Member) and member.guild_permissions.administrator
+
+    @app_commands.command(name='broadcast_reload', description='[仅管理员] 重新加载广播配置')
+    @app_commands.default_permissions(administrator=True)
+    async def reload_broadcast(self, interaction: discord.Interaction):
         """重新加载广播配置"""
+        if not self._has_admin_permission(interaction):
+            await interaction.response.send_message("❌ 此命令仅限服务器管理员使用。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
         try:
             # 停止所有现有任务
-            for task_name, task_loop in self.active_tasks.items():
+            for _task_name, task_loop in self.active_tasks.items():
                 if task_loop.is_running():
                     task_loop.cancel()
             self.active_tasks.clear()
@@ -464,20 +482,24 @@ class BroadcastCog(commands.Cog):
             # 重新启动任务
             await self.start_all_tasks()
             
-            await ctx.send("✅ 广播配置已重新加载")
-            logger.info(f"用户 {ctx.author} 重新加载了广播配置")
+            await interaction.followup.send("✅ 广播配置已重新加载", ephemeral=True)
+            logger.info(f"用户 {interaction.user} 重新加载了广播配置")
             
         except Exception as e:
-            await ctx.send(f"❌ 重新加载失败: {str(e)}")
+            await interaction.followup.send(f"❌ 重新加载失败: {str(e)}", ephemeral=True)
             logger.error(f"重新加载广播配置失败: {e}")
-    
-    @commands.command(name='broadcast_status')
-    @commands.has_permissions(administrator=True)
-    async def broadcast_status(self, ctx):
+
+    @app_commands.command(name='broadcast_status', description='[仅管理员] 查看广播任务状态')
+    @app_commands.default_permissions(administrator=True)
+    async def broadcast_status(self, interaction: discord.Interaction):
         """查看广播任务状态"""
+        if not self._has_admin_permission(interaction):
+            await interaction.response.send_message("❌ 此命令仅限服务器管理员使用。", ephemeral=True)
+            return
+
         try:
             if not self.config:
-                await ctx.send("📭 当前没有配置任何广播任务")
+                await interaction.response.send_message("📭 当前没有配置任何广播任务", ephemeral=True)
                 return
             
             embed = discord.Embed(
@@ -520,11 +542,12 @@ class BroadcastCog(commands.Cog):
                     inline=False
                 )
             
-            embed.set_footer(text=f"请求者: {ctx.author}")
-            await ctx.send(embed=embed)
+            embed.set_footer(text=f"请求者: {interaction.user}")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             
         except Exception as e:
-            await ctx.send(f"❌ 获取状态失败: {str(e)}")
+            response = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+            await response(f"❌ 获取状态失败: {str(e)}", ephemeral=True)
             logger.error(f"获取广播状态失败: {e}")
     
     # ===== 斜杠命令：广播控制面板 =====
@@ -584,7 +607,7 @@ class BroadcastCog(commands.Cog):
                 try:
                     author = await self.bot.fetch_user(int(author_id))
                     author_name = author.name
-                except:
+                except Exception:
                     author_name = f"用户ID: {author_id}"
                 
                 # 获取目标频道名称
@@ -597,7 +620,7 @@ class BroadcastCog(commands.Cog):
                             target_names.append(f"#{channel.name}")
                         else:
                             target_names.append(f"ID:{tid.strip()}")
-                    except:
+                    except Exception:
                         target_names.append(f"ID:{tid.strip()}")
                 
                 if len(target_ids) > 2:
@@ -612,7 +635,7 @@ class BroadcastCog(commands.Cog):
                     try:
                         # 格式化时间 HHMMSS -> HH:MM:SS
                         last_sent_formatted = f"{last_sent[:2]}:{last_sent[2:4]}:{last_sent[4:6]}"
-                    except:
+                    except Exception:
                         last_sent_formatted = '未知'
                 else:
                     last_sent_formatted = '从未'

@@ -12,6 +12,7 @@ class DebugRole(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name='调试身份组', description='[仅管理员] 为指定用户添加或删除身份组')
+    @app_commands.guild_only()
     @app_commands.describe(
         user='要操作的Discord用户',
         role='要添加或删除的身份组',

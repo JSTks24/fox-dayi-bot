@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
+import os
 import re
 from cogs.utils import safe_defer as _safe_defer
 
@@ -41,6 +42,7 @@ TEMPLATE_CONFIG: dict[str, dict[str, str]] = {
 DEFAULT_TEMPLATE_KEY = "auto"
 MAX_MESSAGE_LENGTH = 2000
 CHUNK_SAFE_LENGTH = 1800
+SUMMARY_TIMEOUT_SECONDS = 240.0
 
 def chunk_text(text: str, limit: int = CHUNK_SAFE_LENGTH) -> list[str]:
     """按行优先切分长文本，确保不超过Discord消息长度限制"""
@@ -74,6 +76,21 @@ class Summary(commands.Cog):
         self.bot = bot
         self.default_head_prompt = "请总结以下Discord消息记录：\n"
         self.default_end_prompt = "\n请提供详细的总结和分析。"
+
+    def _get_summary_model(self) -> str | None:
+        return os.getenv("SUMMARY_MODEL") or os.getenv("OPENAI_MODEL")
+
+    def _get_summary_display_name(self) -> str:
+        return (
+            os.getenv("SUMMARY_DISPLAY_NAME")
+            or os.getenv("SUMMARY_MODEL_DISPLAY_NAME")
+            or self._get_summary_model()
+            or "未配置"
+        )
+
+    def _get_summary_timeout_message(self) -> str:
+        timeout_minutes = int(SUMMARY_TIMEOUT_SECONDS // 60)
+        return f"⏱️ AI分析超时（超过{timeout_minutes}分钟），请减少消息数量后重试。"
         
     def parse_discord_link(self, link: str) -> tuple[int, int, int]:
         """
@@ -455,6 +472,8 @@ class Summary(commands.Cog):
         print(f"  - 实际消息数: {len(messages)} 条")
         print(f"  - 格式化后文本长度: {len(formatted_messages)} 字符")
         print(f"  - 完整提示词长度: {len(full_prompt)} 字符")
+        summary_model = self._get_summary_model()
+        summary_display_name = self._get_summary_display_name()
         
         # 调用OpenAI API
         try:
@@ -470,15 +489,15 @@ class Summary(commands.Cog):
                 {"role": "user", "content": full_prompt}
             ]
             
-            # 异步调用 API（设置 4 分钟超时）
+            # 异步调用 API（使用统一超时配置）
             response = await asyncio.wait_for(
                 self.bot.openai_client.chat.completions.create(
-                    model="gemini-3.1-pro-preview",  # 🔥 硬编码模型
+                    model=summary_model,
                     messages=messages_for_api,
                     temperature=1.0,
                     max_tokens=65535
                 ),
-                timeout=240.0
+                timeout=SUMMARY_TIMEOUT_SECONDS
             )
             
             if not response or not response.choices:
@@ -491,7 +510,7 @@ class Summary(commands.Cog):
             
         except asyncio.TimeoutError:
             await interaction.edit_original_response(
-                content='⏱️ AI分析超时（超过2分钟），请减少消息数量后重试。'
+                content=self._get_summary_timeout_message()
             )
             return
         except Exception as e:
@@ -508,7 +527,7 @@ class Summary(commands.Cog):
             f"⏱️ 时间跨度: {time_span_str}",
             f"👥 参与人数: {len(participants)} 人",
             f"📢 频道: <#{channel_id}>",
-            "模型: fox-summarizer",
+            f"模型: {summary_display_name}",
             "------------------------------",
         ]
         header_text = "\n".join(header_lines)

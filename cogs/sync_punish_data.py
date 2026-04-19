@@ -4,14 +4,9 @@ import asyncio
 import os
 import json
 import sqlite3
-from dotenv import load_dotenv
 from datetime import datetime
 
 QUICK_PUNISH_DB_PATH = "quick_punish.db"
-
-# 加载环境变量
-load_dotenv()
-
 
 class SyncPunishDataCog(commands.Cog):
     """监听对接频道的Bot消息以同步处罚记录"""

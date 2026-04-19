@@ -6,13 +6,17 @@ import re
 import io
 import asyncio
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from cogs.utils import CooldownManager, log_slash_command, safe_defer as _safe_defer
 
 
 DB_DIR = 'tagger'
 DB_PATH = os.path.join(DB_DIR, 'tagger.db')
+RECORD_SELECT_COLUMNS = (
+    "id, status, guild_id, target_user_id, message_link, reason, "
+    "tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id"
+)
 
 
 def _ensure_dirs_and_db():
@@ -62,15 +66,17 @@ class Fox14Tagger(commands.Cog):
 
         # 后台任务：每日北京时间0点过期扫描
         self._expiry_task: asyncio.Task | None = None
-        self._expiry_task = asyncio.create_task(self._expiry_scheduler())
 
     async def cog_load(self):
         await asyncio.to_thread(self._init_database)
+        if self._expiry_task is None or self._expiry_task.done():
+            self._expiry_task = asyncio.create_task(self._expiry_scheduler())
 
     def cog_unload(self):
         # 取消后台任务
         if self._expiry_task and not self._expiry_task.done():
             self._expiry_task.cancel()
+        self.bot.tree.remove_command(fox14_tag_context.name, type=fox14_tag_context.type)
 
     # ------------- 工具与校验器 -------------
 
@@ -148,7 +154,7 @@ class Fox14Tagger(commands.Cog):
         n = int(m.group(1))
         unit = m.group(2)
 
-        now = datetime.utcnow()  # 以UTC基准计算绝对到期
+        now = datetime.now(timezone.utc)
         if n <= 0:
             return False, '过期时长必须为正整数', None, s
 
@@ -171,7 +177,7 @@ class Fox14Tagger(commands.Cog):
         """
         if epoch == -1:
             return '永久'
-        dt_utc = datetime.utcfromtimestamp(epoch)
+        dt_utc = datetime.fromtimestamp(epoch, timezone.utc)
         dt_bj = dt_utc + timedelta(hours=8)
         return dt_bj.strftime('%Y-%m-%d %H:%M:%S (北京时间)')
 
@@ -253,8 +259,8 @@ class Fox14Tagger(commands.Cog):
             with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute('''
-                    SELECT id, status, guild_id, target_user_id, message_link, reason,
-                           tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
+                    SELECT
+                    ''' + RECORD_SELECT_COLUMNS + '''
                     FROM tag_records
                     WHERE id = ?
                 ''', (record_id,))
@@ -277,8 +283,8 @@ class Fox14Tagger(commands.Cog):
             with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute('''
-                    SELECT id, status, guild_id, target_user_id, message_link, reason,
-                           tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
+                    SELECT
+                    ''' + RECORD_SELECT_COLUMNS + '''
                     FROM tag_records
                     WHERE guild_id = ? AND status = '正常'
                     ORDER BY id DESC
@@ -293,8 +299,8 @@ class Fox14Tagger(commands.Cog):
             with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute('''
-                    SELECT id, status, guild_id, target_user_id, message_link, reason,
-                           tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
+                    SELECT
+                    ''' + RECORD_SELECT_COLUMNS + '''
                     FROM tag_records
                     WHERE guild_id = ? AND target_user_id = ? AND status = '正常'
                     ORDER BY id DESC
@@ -308,8 +314,8 @@ class Fox14Tagger(commands.Cog):
             with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute('''
-                    SELECT id, status, guild_id, target_user_id, message_link, reason,
-                           tagged_at, tagger_id, tagger_name, expire_at_epoch, expire_input, scope_id
+                    SELECT
+                    ''' + RECORD_SELECT_COLUMNS + '''
                     FROM tag_records
                     WHERE guild_id = ?
                     ORDER BY id DESC
@@ -324,7 +330,7 @@ class Fox14Tagger(commands.Cog):
         返回受影响行数
         """
         def _scan() -> int:
-            now_epoch = int(datetime.utcnow().timestamp())
+            now_epoch = int(datetime.now(timezone.utc).timestamp())
             with self._get_conn() as conn:
                 cur = conn.cursor()
                 cur.execute('''
@@ -344,9 +350,14 @@ class Fox14Tagger(commands.Cog):
         """
         计算距离下一次北京时间 0 点的秒数（无外部时区库，按UTC+8）
         """
-        now_utc = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc)
         bj_now = now_utc + timedelta(hours=8)
-        bj_midnight_next = datetime(bj_now.year, bj_now.month, bj_now.day) + timedelta(days=1)
+        bj_midnight_next = datetime(
+            bj_now.year,
+            bj_now.month,
+            bj_now.day,
+            tzinfo=timezone.utc,
+        ) + timedelta(days=1)
         delta = bj_midnight_next - bj_now
         seconds = int(delta.total_seconds())
         # 容错，至少为1秒
@@ -728,7 +739,7 @@ class Fox14Tagger(commands.Cog):
             if message.author.bot:
                 return
             # 触发范围：有任意全服标记则任意频道触发；否则仅当存在针对当前频道/子区的标记时触发
-            now_epoch = int(datetime.utcnow().timestamp())
+            now_epoch = int(datetime.now(timezone.utc).timestamp())
             user_id = message.author.id
             guild_id = message.guild.id
             

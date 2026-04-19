@@ -4,11 +4,8 @@ from discord import app_commands
 import os
 from datetime import datetime, timedelta
 import asyncio
-from dotenv import load_dotenv
 import logging
 import re
-
-load_dotenv()
 
 class AutoGarbageCollector(commands.Cog):
     def __init__(self, bot):
