@@ -31,8 +31,8 @@
    - 填写 `DISCORD_BOT_TOKEN`、`OPENAI_API_KEY`、`OPENAI_API_BASE_URL`、`OPENAI_MODEL` 等必要项
 
 4. **准备提示词文件**
-   - `prompt/ALL.txt`：`appdayi` 与 `mention` 等答疑链路使用的主提示词
-   - `summary_prompt/*.txt`：`summary` 功能使用的模板提示词
+   - `data/prompt/ALL.txt`：`appdayi` 与 `mention` 等答疑链路使用的主提示词
+   - `data/summary_prompt/*.txt`：`summary` 功能使用的模板提示词
 
 5. **运行机器人**
    ```bash
@@ -54,14 +54,15 @@
 │   ├── db/                 # SQLite 数据库
 │   ├── api_table/          # URL 黑白名单与提示词
 │   ├── mention/            # mention 模块持久化数据
+│   ├── prompt/             # 答疑主提示词目录（ALL.txt 等）
+│   ├── summary_prompt/     # summary 专用提示词目录
 │   └── config/             # 运行期 JSON 配置
 ├── runtime/                # 运行时生成、可重建的数据
 │   ├── temp/               # 临时文件
 │   ├── save/               # 提示词归档
 │   ├── logs/               # 运行日志
 │   └── rag_data/           # RAG 向量数据
-├── prompt/                 # 答疑主提示词目录（ALL.txt 等）
-├── summary_prompt/         # summary 专用提示词目录
+├── deprecated/             # 已废弃但保留参考价值的脚本/资料
 ├── bot.py                  # 机器人主入口
 └── requirements.txt        # Python 依赖
 ```

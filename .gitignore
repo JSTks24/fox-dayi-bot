@@ -78,8 +78,6 @@ app_temp/*
 !app_temp/.gitkeep
 broadcast/*
 !broadcast/.gitkeep
-role_configure/*
-!role_configure/.gitkeep
 rag_data/*
 !rag_data/.gitkeep
 
@@ -96,10 +94,6 @@ xiaozuowen/
 uploaded_prompt/
 rag_prompt/*
 !rag_prompt/.gitkeep
-summary_prompt/*
-!summary_prompt/.gitkeep
-prompt/*
-!prompt/.gitkeep
 # docs
 
 /docs
@@ -113,3 +107,4 @@ refactoring/
 AGENTS.md
 developer-docs/
 .pytest_cache/
+deprecated/

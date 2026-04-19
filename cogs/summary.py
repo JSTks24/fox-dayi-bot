@@ -5,37 +5,42 @@ import asyncio
 import os
 import re
 from cogs.utils import safe_defer as _safe_defer
+from paths import SUMMARY_PROMPT_DIR
+
+
+def _summary_prompt_path(filename: str) -> str:
+    return os.fspath(SUMMARY_PROMPT_DIR / filename)
 
 TEMPLATE_CONFIG: dict[str, dict[str, str]] = {
     "judge": {
         "display": "判决",
-        "head_path": "summary_prompt/judge_head.txt",
-        "end_path": "summary_prompt/judge_end.txt",
+        "head_path": _summary_prompt_path("judge_head.txt"),
+        "end_path": _summary_prompt_path("judge_end.txt"),
     },
     "debate": {
         "display": "辩论",
-        "head_path": "summary_prompt/summary_head.txt",
-        "end_path": "summary_prompt/summary_end_debate.txt",
+        "head_path": _summary_prompt_path("summary_head.txt"),
+        "end_path": _summary_prompt_path("summary_end_debate.txt"),
     },
     "chat": {
         "display": "聊天",
-        "head_path": "summary_prompt/summary_head.txt",
-        "end_path": "summary_prompt/summary_end_chat.txt",
+        "head_path": _summary_prompt_path("summary_head.txt"),
+        "end_path": _summary_prompt_path("summary_end_chat.txt"),
     },
     "aar": {
         "display": "复盘",
-        "head_path": "summary_prompt/summary_head.txt",
-        "end_path": "summary_prompt/summary_end_aar.txt",
+        "head_path": _summary_prompt_path("summary_head.txt"),
+        "end_path": _summary_prompt_path("summary_end_aar.txt"),
     },
     "question": {
         "display": "提问",
-        "head_path": "summary_prompt/summary_head.txt",
-        "end_path": "summary_prompt/summary_end_question.txt",
+        "head_path": _summary_prompt_path("summary_head.txt"),
+        "end_path": _summary_prompt_path("summary_end_question.txt"),
     },
     "auto": {
         "display": "自动",
-        "head_path": "summary_prompt/summary_head.txt",
-        "end_path": "summary_prompt/summary_end_auto.txt",
+        "head_path": _summary_prompt_path("summary_head.txt"),
+        "end_path": _summary_prompt_path("summary_end_auto.txt"),
     },
 }
 

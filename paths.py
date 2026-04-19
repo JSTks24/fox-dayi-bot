@@ -34,6 +34,9 @@ ROLE_CONFIGURE_DIR = DATA_DIR / "role_configure"
 ROLE_CONFIGURE_AVAILABLE_CHANNEL_FILE = ROLE_CONFIGURE_DIR / "available_channel.json"
 ROLE_CONFIGURE_PANELS_FILE = ROLE_CONFIGURE_DIR / "panels.json"
 
+PROMPT_DIR = DATA_DIR / "prompt"
+SUMMARY_PROMPT_DIR = DATA_DIR / "summary_prompt"
+
 CONFIG_DIR = DATA_DIR / "config"
 ROLE_SYNC_CONFIG_FILE = CONFIG_DIR / "role_sync_config.json"
 QUICK_PUNISH_SYNC_CONFIG_FILE = CONFIG_DIR / "quick_punish_sync.json"
@@ -53,8 +56,6 @@ RAG_DATA_DIR = RUNTIME_DIR / "rag_data"
 API_TABLE_HISTORY_FILE = RUNTIME_DIR / "api_table_history.txt"
 PROMPT_LOG_DIR = RUNTIME_DIR / "prompt_log"
 
-PROMPT_DIR = ROOT_DIR / "prompt"
-SUMMARY_PROMPT_DIR = ROOT_DIR / "summary_prompt"
 RAG_PROMPT_DIR = ROOT_DIR / "rag_prompt"
 UPLOADED_PROMPT_DIR = ROOT_DIR / "uploaded_prompt"
 XIAOZUOWEN_DIR = ROOT_DIR / "xiaozuowen"
@@ -69,6 +70,8 @@ PROJECT_DIRS = (
     MENTION_KB_DIR,
     MENTION_THREAD_METADATA_DIR,
     ROLE_CONFIGURE_DIR,
+    PROMPT_DIR,
+    SUMMARY_PROMPT_DIR,
     CONFIG_DIR,
     TEMP_DIR,
     APP_TEMP_DIR,
@@ -98,6 +101,8 @@ LEGACY_PATHS = (
     ROOT_DIR / "mention" / "threadsMetadata",
     ROOT_DIR / "reviewer" / "unanswered.db",
     ROOT_DIR / "tagger" / "tagger.db",
+    ROOT_DIR / "prompt",
+    ROOT_DIR / "summary_prompt",
     ROOT_DIR / "role_configure" / "available_channel.json",
     ROOT_DIR / "role_configure" / "panels.json",
     ROOT_DIR / "role_configure" / "timed_role_members.db",
