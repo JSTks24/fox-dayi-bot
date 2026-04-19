@@ -283,13 +283,23 @@ async def load_cogs():
         print(f"[警告] 未找到 '{cogs_dir}' 文件夹，跳过加载 cogs。")
         return
 
-    for filename in os.listdir(cogs_dir):
-        if filename.endswith(".py") and filename not in NON_EXTENSION_MODULES:
-            try:
-                await bot.load_extension(f"{cogs_dir}.{filename[:-3]}")
-                print(f"✅ 已成功加载 cog: {filename}")
-            except Exception as exc:
-                print(f"❌ 加载 cog {filename} 时发生错误: {exc}")
+    extension_names: list[str] = []
+    for entry in sorted(os.listdir(cogs_dir)):
+        entry_path = os.path.join(cogs_dir, entry)
+        if entry.endswith(".py") and entry not in NON_EXTENSION_MODULES:
+            extension_names.append(f"{cogs_dir}.{entry[:-3]}")
+            continue
+        if entry.startswith("__") or not os.path.isdir(entry_path):
+            continue
+        if os.path.exists(os.path.join(entry_path, "__init__.py")):
+            extension_names.append(f"{cogs_dir}.{entry}")
+
+    for extension_name in extension_names:
+        try:
+            await bot.load_extension(extension_name)
+            print(f"✅ 已成功加载 cog: {extension_name}")
+        except Exception as exc:
+            print(f"❌ 加载 cog {extension_name} 时发生错误: {exc}")
 
 
 async def main():

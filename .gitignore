@@ -101,3 +101,5 @@ naoleiwiki-main/
 .codex/
 refactoring/
 AGENTS.md
+developer-docs/
+.pytest_cache/

@@ -1,2 +1,5 @@
-# cogs/__init__.py
-# 这个文件让 Python 将 cogs 目录视为一个包。
+"""Cog package markers and compatibility aliases."""
+
+from . import tagger as fox14_tagger
+
+__all__ = ["fox14_tagger"]
