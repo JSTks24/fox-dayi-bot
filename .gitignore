@@ -104,6 +104,6 @@ naoleiwiki-main/
 .codex/
 refactoring/
 AGENTS.md
-developer-docs/
+developer/
 .pytest_cache/
 deprecated/
