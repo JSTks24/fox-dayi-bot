@@ -31,6 +31,19 @@ def check_admin_or_trusted(interaction: discord.Interaction) -> bool:
     return interaction.user.id in admins or interaction.user.id in trusted_users
 
 
+def get_user_tier(client: object, user_id: int) -> str:
+    """Return the user's bot-level tier based on in-memory permission lists."""
+    admins = getattr(client, "admins", [])
+    if user_id in admins:
+        return "admin"
+
+    trusted_users = getattr(client, "trusted_users", [])
+    if user_id in trusted_users:
+        return "trusted"
+
+    return "other"
+
+
 # ── 交互辅助 ──────────────────────────────────────────────
 
 async def safe_defer(interaction: discord.Interaction, ephemeral: bool = True):

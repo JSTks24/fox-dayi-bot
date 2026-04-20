@@ -3,6 +3,9 @@ import os
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+
+import discord
 
 from cogs import fox14_tagger, mention, quick_punish
 from tests.conftest import temporary_workdir
@@ -23,11 +26,20 @@ class DummyRole:
 
 
 class DummyGuild:
-    def __init__(self, roles=None):
+    def __init__(self, roles=None, guild_id: int = 1, channels=None, threads=None):
+        self.id = guild_id
         self._roles = {role.id: role for role in roles or []}
+        self._channels = {channel.id: channel for channel in channels or []}
+        self._threads = {thread.id: thread for thread in threads or []}
 
     def get_role(self, role_id: int):
         return self._roles.get(role_id)
+
+    def get_channel(self, channel_id: int):
+        return self._channels.get(channel_id)
+
+    def get_thread(self, channel_id: int):
+        return self._threads.get(channel_id)
 
 
 class DummyBot:
@@ -37,6 +49,59 @@ class DummyBot:
 
     def get_guild(self, guild_id: int):
         return self._guild
+
+
+class DummyResponse:
+    def __init__(self):
+        self.message = None
+        self.modal = None
+
+    async def send_message(self, content: str, ephemeral: bool = False):
+        self.message = (content, ephemeral)
+
+    async def send_modal(self, modal):
+        self.modal = modal
+
+
+class DummyClient:
+    def __init__(self, cog=None, channels=None):
+        self._cog = cog
+        self._channels = {channel.id: channel for channel in channels or []}
+
+    def get_cog(self, name: str):
+        if name == "QuickPunishCog":
+            return self._cog
+        return None
+
+    def get_channel(self, channel_id: int):
+        return self._channels.get(channel_id)
+
+    async def fetch_channel(self, channel_id: int):
+        raise AssertionError(f"unexpected fetch_channel call for {channel_id}")
+
+
+class DummyInteraction:
+    def __init__(self, guild: DummyGuild | None, client: DummyClient, user=None):
+        self.guild = guild
+        self.guild_id = guild.id if guild else None
+        self.client = client
+        self.user = user or SimpleNamespace(id=99, roles=[])
+        self.response = DummyResponse()
+
+
+class DummyChannel:
+    def __init__(self, channel_id: int, guild: DummyGuild, *, message=None, fetch_error: Exception | None = None):
+        self.id = channel_id
+        self.guild = guild
+        self._message = message
+        self._fetch_error = fetch_error
+
+    async def fetch_message(self, message_id: int):
+        if self._fetch_error is not None:
+            raise self._fetch_error
+        if self._message is None or self._message.id != message_id:
+            raise discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "missing")
+        return self._message
 
 
 class MentionMetadataTests(unittest.TestCase):
@@ -122,6 +187,109 @@ class QuickPunishTests(unittest.TestCase):
                 (quick_punish.remote_quick_punish_context.name, quick_punish.remote_quick_punish_context.type),
             ],
         )
+
+
+class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
+    def _build_quick_punish_cog(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog.enabled = True
+        cog.has_permission = lambda interaction: True
+        return cog
+
+    def _build_message(self, guild: DummyGuild, channel: DummyChannel, *, author_bot: bool = False):
+        author = SimpleNamespace(
+            bot=author_bot,
+            display_name="Target",
+            name="target_user",
+            id=123456,
+        )
+        return SimpleNamespace(id=777, author=author, channel=channel, guild=guild)
+
+    def test_parse_message_link_supports_known_domains(self):
+        self.assertEqual(
+            quick_punish.commands._parse_quick_punish_message_link(
+                "https://discord.com/channels/1/2/3"
+            ),
+            (1, 2, 3),
+        )
+        self.assertEqual(
+            quick_punish.commands._parse_quick_punish_message_link(
+                "https://discordapp.com/channels/4/5/6"
+            ),
+            (4, 5, 6),
+        )
+        self.assertIsNone(quick_punish.commands._parse_quick_punish_message_link("not-a-link"))
+
+    async def test_resolve_message_from_link_rejects_cross_guild(self):
+        guild = DummyGuild(guild_id=1)
+        interaction = DummyInteraction(guild, DummyClient())
+
+        message, error = await quick_punish.commands._resolve_quick_punish_message_from_link(
+            interaction,
+            "https://discord.com/channels/2/10/20",
+        )
+
+        self.assertIsNone(message)
+        self.assertEqual(error, "❌ 只能处理当前服务器的消息链接，不支持跨服务器。")
+
+    async def test_resolve_message_from_link_reports_missing_or_inaccessible_messages(self):
+        guild = DummyGuild(guild_id=1)
+
+        deleted_channel = DummyChannel(
+            10,
+            guild,
+            fetch_error=discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "missing"),
+        )
+        deleted_interaction = DummyInteraction(guild, DummyClient(channels=[deleted_channel]))
+        _, deleted_error = await quick_punish.commands._resolve_quick_punish_message_from_link(
+            deleted_interaction,
+            "https://discord.com/channels/1/10/20",
+        )
+        self.assertEqual(deleted_error, "❌ 找不到目标消息，可能已被删除。")
+
+        forbidden_channel = DummyChannel(
+            11,
+            guild,
+            fetch_error=discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "forbidden"),
+        )
+        forbidden_interaction = DummyInteraction(guild, DummyClient(channels=[forbidden_channel]))
+        _, forbidden_error = await quick_punish.commands._resolve_quick_punish_message_from_link(
+            forbidden_interaction,
+            "https://discord.com/channels/1/11/21",
+        )
+        self.assertEqual(forbidden_error, "❌ 无法访问目标消息，可能是频道或线程不可见。")
+
+    async def test_context_menus_still_open_existing_modals(self):
+        cog = self._build_quick_punish_cog()
+        guild = DummyGuild(guild_id=1)
+        channel = DummyChannel(10, guild)
+        message = self._build_message(guild, channel)
+        client = DummyClient(cog=cog)
+        interaction = DummyInteraction(guild, client)
+
+        await quick_punish.quick_punish_context.callback(interaction, message)
+        self.assertIsInstance(interaction.response.modal, quick_punish.commands.QuickPunishModal)
+
+        remote_interaction = DummyInteraction(guild, client)
+        await quick_punish.remote_quick_punish_context.callback(remote_interaction, message)
+        self.assertIsInstance(remote_interaction.response.modal, quick_punish.commands.RemoteQuickPunishModal)
+
+    async def test_slash_quick_punish_opens_remote_modal_from_message_link(self):
+        cog = self._build_quick_punish_cog()
+        guild = DummyGuild(guild_id=1)
+        channel = DummyChannel(10, guild)
+        message = self._build_message(guild, channel)
+        channel._message = message
+        interaction = DummyInteraction(guild, DummyClient(cog=cog, channels=[channel]))
+
+        await quick_punish.QuickPunishCommandsMixin.quick_punish_slash.callback(
+            cog,
+            interaction,
+            "https://discord.com/channels/1/10/777",
+            discord.app_commands.Choice(name="远距", value="remote"),
+        )
+
+        self.assertIsInstance(interaction.response.modal, quick_punish.commands.RemoteQuickPunishModal)
 
 
 class Fox14TaggerTests(unittest.TestCase):

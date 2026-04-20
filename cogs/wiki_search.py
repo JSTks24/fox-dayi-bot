@@ -8,13 +8,25 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.utils import CooldownManager, log_slash_command, safe_defer as _safe_defer
+from cogs.utils import CooldownManager, get_user_tier, log_slash_command, safe_defer as _safe_defer
 
 DEFAULT_BASE_URL = "https://naoleiwiki.pages.dev"
 DEFAULT_LIMIT = 5
 MAX_LIMIT = 50
 REQUEST_TIMEOUT_SECONDS = 15
-USER_COOLDOWN_SECONDS = 15
+ADMIN_COOLDOWN_SECONDS = 0
+TRUSTED_COOLDOWN_SECONDS = 10
+USER_COOLDOWN_SECONDS = 30
+TIER_COOLDOWN_SECONDS = {
+    "admin": ADMIN_COOLDOWN_SECONDS,
+    "trusted": TRUSTED_COOLDOWN_SECONDS,
+    "other": USER_COOLDOWN_SECONDS,
+}
+TIER_LABELS = {
+    "admin": "管理员",
+    "trusted": "受信任用户",
+    "other": "普通用户",
+}
 
 SECTION_LABELS = {
     "faq": "常见问题",
@@ -170,8 +182,25 @@ class WikiSearch(commands.Cog):
         self.bot = bot
         self.user_cooldowns = CooldownManager(USER_COOLDOWN_SECONDS)
 
+    def get_user_tier(self, user_id: int) -> str:
+        return get_user_tier(self.bot, user_id)
+
+    def get_user_cooldown_seconds(self, user_id: int) -> int:
+        return TIER_COOLDOWN_SECONDS[self.get_user_tier(user_id)]
+
     def get_remaining_cooldown(self, user_id: int) -> int:
+        if self.get_user_cooldown_seconds(user_id) <= 0:
+            return 0
         return self.user_cooldowns.get_remaining(user_id)
+
+    def build_cooldown_message(self, user_id: int, remaining_seconds: int) -> str:
+        tier = self.get_user_tier(user_id)
+        cooldown_seconds = self.get_user_cooldown_seconds(user_id)
+        tier_label = TIER_LABELS[tier]
+        return (
+            f"⏳ 你当前为{tier_label}，/问题搜索冷却为 {cooldown_seconds} 秒，"
+            f"还需等待 {remaining_seconds} 秒后再试。"
+        )
 
     @app_commands.command(name="问题搜索", description="在脑类知识库中搜索相关内容")
     @app_commands.describe(
@@ -190,7 +219,7 @@ class WikiSearch(commands.Cog):
         remaining_cooldown = self.get_remaining_cooldown(user_id)
         if remaining_cooldown > 0:
             await interaction.edit_original_response(
-                content=f"⏳ 你使用得太频繁了，请在 {remaining_cooldown} 秒后再试。"
+                content=self.build_cooldown_message(user_id, remaining_cooldown)
             )
             log_slash_command(interaction, False)
             return
@@ -201,7 +230,9 @@ class WikiSearch(commands.Cog):
             log_slash_command(interaction, False)
             return
 
-        self.user_cooldowns.set_cooldown(user_id)
+        cooldown_seconds = self.get_user_cooldown_seconds(user_id)
+        if cooldown_seconds > 0:
+            self.user_cooldowns.set_cooldown(user_id, seconds=cooldown_seconds)
 
         base_url = normalize_base_url(os.getenv("NAOLEI_WIKI_BASE_URL", DEFAULT_BASE_URL))
         limit = resolve_limit(os.getenv("NAOLEI_WIKI_SEARCH_LIMIT", str(DEFAULT_LIMIT)))

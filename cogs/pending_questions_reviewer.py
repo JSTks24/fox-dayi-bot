@@ -10,6 +10,7 @@ import asyncio
 import io
 from typing import Any
 from collections.abc import Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from paths import REVIEWER_DB
 
@@ -43,6 +44,16 @@ AI_MODEL_NAME = os.getenv("OPENAI_MODEL") or os.getenv("IMAGE_DESCRIBE_MODEL")
 RESOLVED_TAG_NAME = os.getenv("RESOLVED_TAG_NAME", "已解决")
 DB_DIR = str(REVIEWER_DB.parent)
 DB_PATH = str(REVIEWER_DB)
+REVIEWER_DISPLAY_TIMEZONE_NAME = "Asia/Shanghai"
+REVIEWER_DISPLAY_TIMEZONE_FILE_LABEL = "Asia-Shanghai"
+try:
+    REVIEWER_DISPLAY_TIMEZONE = ZoneInfo(REVIEWER_DISPLAY_TIMEZONE_NAME)
+except ZoneInfoNotFoundError:
+    # Asia/Shanghai is UTC+08:00 year-round, so a fixed-offset fallback keeps display semantics stable.
+    REVIEWER_DISPLAY_TIMEZONE = datetime.timezone(
+        datetime.timedelta(hours=8),
+        name=REVIEWER_DISPLAY_TIMEZONE_NAME,
+    )
 
 class UnansweredFilter(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -58,7 +69,7 @@ class UnansweredFilter(commands.Cog):
         self._ai_batch_size: int = 4
         self._ai_batch_interval_seconds: int = 10
 
-        # 启动定时任务 (每日北京时间 12:00 = UTC 04:00)
+        # Run the scheduler at UTC 04:00, which is 12:00 in the reviewer business timezone.
         self.daily_check_task.start()
 
     async def cog_load(self):
@@ -568,7 +579,7 @@ class UnansweredFilter(commands.Cog):
 
     # ================= 定时任务与指令 =================
 
-    @tasks.loop(time=datetime.time(hour=4, minute=0)) # UTC 04:00 = Beijing 12:00
+    @tasks.loop(time=datetime.time(hour=4, minute=0))  # UTC scheduler; user-facing reviewer time is Asia/Shanghai.
     async def daily_check_task(self):
         await self.bot.wait_until_ready()
         print("⏰ [Unanswered] 执行每日扫描...")
@@ -579,9 +590,31 @@ class UnansweredFilter(commands.Cog):
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-    def _build_last_ai_response_txt(self) -> str:
+    def _to_reviewer_display_time(self, value: datetime.datetime | None = None) -> datetime.datetime:
+        """Convert a timestamp to the reviewer business/display timezone."""
+        current = value or datetime.datetime.now(datetime.timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=datetime.timezone.utc)
+        return current.astimezone(REVIEWER_DISPLAY_TIMEZONE)
+
+    def _build_daily_report_title(self, now: datetime.datetime | None = None) -> str:
+        """Build the daily report title in the reviewer business timezone."""
+        display_now = self._to_reviewer_display_time(now)
+        return f"📅 {display_now.strftime('%Y-%m-%d')} 待解决问题汇总（{REVIEWER_DISPLAY_TIMEZONE_NAME}）"
+
+    def _build_ai_report_filename(self, now: datetime.datetime | None = None) -> str:
+        """Build the manual-report filename using the reviewer business timezone."""
+        display_now = self._to_reviewer_display_time(now)
+        timestamp = display_now.strftime("%Y%m%d_%H%M%S")
+        return (
+            f"unanswered_last_ai_response_{timestamp}_"
+            f"{REVIEWER_DISPLAY_TIMEZONE_FILE_LABEL}.txt"
+        )
+
+    def _build_last_ai_response_txt(self, now: datetime.datetime | None = None) -> str:
         """生成用于私信附件的 AI 批处理执行报告（含每批原始响应）。"""
-        now_str = datetime.datetime.now(datetime.timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+        display_now = self._to_reviewer_display_time(now)
+        now_str = display_now.strftime("%Y-%m-%d %H:%M:%S %z")
 
         total_logs = len(self._ai_request_logs)
         api_success = sum(1 for x in self._ai_request_logs if x.get("ok"))
@@ -590,7 +623,7 @@ class UnansweredFilter(commands.Cog):
         json_failed = api_success - json_success
 
         lines = [
-            f"生成时间: {now_str}",
+            f"生成时间({REVIEWER_DISPLAY_TIMEZONE_NAME}): {now_str}",
             f"模型: {AI_MODEL_NAME or '未配置'}",
             f"状态: {self._last_ai_response_note}",
             f"待分析帖子数: {self._ai_expected_total_threads}",
@@ -643,7 +676,7 @@ class UnansweredFilter(commands.Cog):
         """手动扫描结束后，私信管理员并附带 AI 批处理报告 txt。"""
         status = "成功" if success else "失败"
         txt_content = self._build_last_ai_response_txt()
-        file_name = f"unanswered_last_ai_response_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        file_name = self._build_ai_report_filename()
         file_obj = discord.File(io.BytesIO(txt_content.encode("utf-8")), filename=file_name)
 
         await user.send(
@@ -868,7 +901,7 @@ class UnansweredFilter(commands.Cog):
 
                 # 构建 Embed
                 embed = discord.Embed(
-                    title=f"📅 {datetime.date.today()} 待解决问题汇总",
+                    title=self._build_daily_report_title(),
                     description="以下问题仍待解决，请大家看看是否能提供帮助！",
                     color=discord.Color.orange()
                 )

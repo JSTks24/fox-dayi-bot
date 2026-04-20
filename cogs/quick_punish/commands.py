@@ -3,9 +3,100 @@ from __future__ import annotations
 import discord
 from discord import app_commands
 from datetime import datetime
+import re
 from typing import Any
 import io
 from cogs.utils import safe_defer
+
+
+_QUICK_PUNISH_MESSAGE_LINK_RE = re.compile(
+    r"^https://(?:discord(?:app)?\.com)/channels/(\d+)/(\d+)/(\d+)$"
+)
+
+
+def _parse_quick_punish_message_link(message_link: str) -> tuple[int, int, int] | None:
+    """Parse a Discord message link into guild/channel/message IDs."""
+    if not message_link:
+        return None
+
+    match = _QUICK_PUNISH_MESSAGE_LINK_RE.match(message_link.strip())
+    if not match:
+        return None
+
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+async def _resolve_quick_punish_channel(interaction: discord.Interaction, channel_id: int):
+    """Resolve target channels with cache-first lookup and API fallback."""
+    client = interaction.client
+    channel = client.get_channel(channel_id)
+    if channel is not None:
+        return channel
+
+    guild = interaction.guild
+    if guild is not None:
+        channel = guild.get_channel(channel_id)
+        if channel is not None:
+            return channel
+
+        thread = guild.get_thread(channel_id)
+        if thread is not None:
+            return thread
+
+    return await client.fetch_channel(channel_id)
+
+
+async def _resolve_quick_punish_message_from_link(
+    interaction: discord.Interaction,
+    message_link: str,
+) -> tuple[discord.Message | None, str | None]:
+    """Resolve and validate the punishment target message from a message link."""
+    parsed = _parse_quick_punish_message_link(message_link)
+    if not parsed:
+        return None, (
+            "❌ 无效的消息链接格式。请提供 "
+            "`https://discord.com/channels/服务器ID/频道ID/消息ID`。"
+        )
+
+    guild = interaction.guild
+    if guild is None:
+        return None, "❌ 该命令只能在服务器内使用。"
+
+    guild_id, channel_id, message_id = parsed
+    if guild_id != guild.id:
+        return None, "❌ 只能处理当前服务器的消息链接，不支持跨服务器。"
+
+    try:
+        channel = await _resolve_quick_punish_channel(interaction, channel_id)
+    except discord.NotFound:
+        return None, "❌ 找不到消息所在频道，可能已被删除。"
+    except discord.Forbidden:
+        return None, "❌ 无法访问该消息所在频道或线程。"
+    except discord.HTTPException:
+        return None, "❌ 获取消息所在频道失败，请稍后重试。"
+
+    if getattr(getattr(channel, "guild", None), "id", guild.id) != guild.id:
+        return None, "❌ 只能处理当前服务器的消息链接，不支持跨服务器。"
+
+    if isinstance(channel, discord.Thread):
+        try:
+            await channel.join()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    if not hasattr(channel, "fetch_message"):
+        return None, "❌ 无法访问该消息所在频道或线程。"
+
+    try:
+        target_message = await channel.fetch_message(message_id)
+    except discord.NotFound:
+        return None, "❌ 找不到目标消息，可能已被删除。"
+    except discord.Forbidden:
+        return None, "❌ 无法访问目标消息，可能是频道或线程不可见。"
+    except discord.HTTPException:
+        return None, "❌ 获取目标消息失败，请稍后重试。"
+
+    return target_message, None
 
 class QuickPunishModal(discord.ui.Modal):
     """快速处罚确认表单"""
@@ -136,6 +227,17 @@ class RemoteQuickPunishModal(discord.ui.Modal):
             await interaction.followup.send(f"❌ 发生错误：{str(error)}", ephemeral=True)
         except Exception:
             pass
+
+
+async def _send_quick_punish_modal(
+    interaction: discord.Interaction,
+    message: discord.Message,
+    cog,
+    mode: str,
+):
+    """Open the configured quick punish modal for the resolved target message."""
+    modal_cls = RemoteQuickPunishModal if mode == "remote" else QuickPunishModal
+    await interaction.response.send_modal(modal_cls(target_message=message, cog=cog))
 
 class QuickPunishConfirmView(discord.ui.View):
     """二次确认视图：包含模板选择下拉选单与确认/取消按钮"""
@@ -315,9 +417,7 @@ async def quick_punish_context(interaction: discord.Interaction, message: discor
     if not cog:
         return
 
-    # 显示确认表单
-    modal = QuickPunishModal(target_message=message, cog=cog)
-    await interaction.response.send_modal(modal)
+    await _send_quick_punish_modal(interaction, message, cog, "normal")
 
 @app_commands.context_menu(name="远距送走")
 @app_commands.guild_only()
@@ -327,10 +427,42 @@ async def remote_quick_punish_context(interaction: discord.Interaction, message:
     if not cog:
         return
 
-    modal = RemoteQuickPunishModal(target_message=message, cog=cog)
-    await interaction.response.send_modal(modal)
+    await _send_quick_punish_modal(interaction, message, cog, "remote")
 
 class QuickPunishCommandsMixin:
+    @app_commands.command(name="快速处罚", description="通过消息链接打开快速处罚流程")
+    @app_commands.describe(
+        message_link="目标消息链接（右键消息 -> 复制消息链接）",
+        mode="处罚模式",
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="普通", value="normal"),
+            app_commands.Choice(name="远距", value="remote"),
+        ]
+    )
+    @app_commands.guild_only()
+    async def quick_punish_slash(
+        self,
+        interaction: discord.Interaction,
+        message_link: str,
+        mode: app_commands.Choice[str],
+    ):
+        """Open the quick punish flow from a message link."""
+        target_message, error_message = await _resolve_quick_punish_message_from_link(
+            interaction,
+            message_link,
+        )
+        if error_message:
+            await interaction.response.send_message(error_message, ephemeral=True)
+            return
+
+        cog = await _validate_quick_punish_context(interaction, target_message, "快速处罚")
+        if not cog:
+            return
+
+        await _send_quick_punish_modal(interaction, target_message, cog, mode.value)
+
     @app_commands.command(name="快速处罚-查询", description="查询最近的快速处罚记录")
     @app_commands.describe(count="要查询的记录数量（默认3条，最多1000条）")
     @app_commands.guild_only()

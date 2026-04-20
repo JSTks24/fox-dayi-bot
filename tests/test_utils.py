@@ -59,6 +59,11 @@ class UtilsTests(unittest.TestCase):
         self.assertTrue(utils.check_admin_or_trusted(DummyInteraction(user_id=2, trusted_users=[2])))
         self.assertFalse(utils.check_admin_or_trusted(DummyInteraction(user_id=3)))
 
+    def test_get_user_tier(self):
+        self.assertEqual(utils.get_user_tier(DummyClient(admins=[1]), 1), "admin")
+        self.assertEqual(utils.get_user_tier(DummyClient(trusted_users=[2]), 2), "trusted")
+        self.assertEqual(utils.get_user_tier(DummyClient(), 3), "other")
+
     def test_safe_defer_is_idempotent(self):
         interaction = DummyInteraction()
 
