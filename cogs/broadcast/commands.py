@@ -169,7 +169,7 @@ class AddTaskModal(discord.ui.Modal, title='新增广播任务'):
 
     content = discord.ui.TextInput(
         label='广播内容',
-        placeholder='支持宏：{{time}}=当前时间，{{count}}=今日次数，\\n=换行',
+        placeholder='支持 \\n 换行，不再替换 {{time}} / {{count}} 宏',
         required=True,
         style=discord.TextStyle.paragraph,
         max_length=2000

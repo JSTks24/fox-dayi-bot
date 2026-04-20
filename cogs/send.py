@@ -4,7 +4,7 @@ from discord import app_commands
 import re
 from cogs.utils import check_admin, log_slash_command, safe_defer as _safe_defer
 
-class SlashSend(commands.Cog):
+class SendCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -35,12 +35,54 @@ class SlashSend(commands.Cog):
             return None
         return fetched_channel
 
+    @staticmethod
+    def _normalize_send_content(content: str | None) -> str | None:
+        if content is None:
+            return None
+        normalized = content.strip()
+        return normalized or None
+
+    @staticmethod
+    def _build_embed(
+        embed_title: str | None,
+        embed_description: str | None,
+        embed_color: str | None,
+    ) -> discord.Embed | None:
+        title = embed_title.strip() if embed_title else None
+        description = embed_description.strip() if embed_description else None
+        color_text = embed_color.strip() if embed_color else None
+
+        if not title and not description and not color_text:
+            return None
+        if not title and not description:
+            raise ValueError("Embed 至少需要标题或描述。")
+
+        color = discord.Color.blurple()
+        if color_text:
+            normalized = color_text.lstrip("#")
+            if len(normalized) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in normalized):
+                raise ValueError("Embed 颜色必须是 6 位十六进制，例如 #5865F2。")
+            color = discord.Color(int(normalized, 16))
+
+        return discord.Embed(title=title, description=description, color=color)
+
     @app_commands.command(name='send', description='[仅管理员] 发送消息或回复指定消息')
     @app_commands.describe(
-        content='要发送的文字内容',
-        message_link='（可选）要回复的消息链接'
+        content='（可选）要发送的文字内容',
+        message_link='（可选）要回复的消息链接',
+        embed_title='（可选）单个 Embed 标题',
+        embed_description='（可选）单个 Embed 描述',
+        embed_color='（可选）Embed 颜色，6 位十六进制，例如 #5865F2',
     )
-    async def send_message(self, interaction: discord.Interaction, content: str, message_link: str = None):
+    async def send_message(
+        self,
+        interaction: discord.Interaction,
+        content: str | None = None,
+        message_link: str | None = None,
+        embed_title: str | None = None,
+        embed_description: str | None = None,
+        embed_color: str | None = None,
+    ):
         """
         发送消息或回复指定消息的斜杠指令
         仅限管理员使用
@@ -55,6 +97,13 @@ class SlashSend(commands.Cog):
             return
 
         try:
+            normalized_content = self._normalize_send_content(content)
+            embed = self._build_embed(embed_title, embed_description, embed_color)
+            if normalized_content is None and embed is None:
+                await interaction.followup.send('❌ 请至少提供文字内容，或填写一个 Embed。', ephemeral=True)
+                log_slash_command(interaction, False)
+                return
+
             # 如果没有提供消息链接，直接在当前频道发送消息（普通消息，无斜杠横幅）
             if not message_link:
                 # 检查发送权限（避免因缺少权限而失败）
@@ -68,7 +117,7 @@ class SlashSend(commands.Cog):
                     # 权限检查异常不应阻止消息发送，继续尝试发送
                     pass
 
-                await interaction.channel.send(content)
+                await interaction.channel.send(content=normalized_content, embed=embed)
                 await interaction.followup.send('✅ 已在当前频道发送消息。', ephemeral=True)
                 log_slash_command(interaction, True)
                 print(f"👑 管理员 {interaction.user.name} ({interaction.user.id}) 在频道 {interaction.channel.name} 发送了消息")
@@ -119,19 +168,28 @@ class SlashSend(commands.Cog):
                 return
 
             # 回复目标消息
-            await target_message.reply(content)
+            await target_message.reply(content=normalized_content, embed=embed)
             
             # 发送成功确认（仅管理员可见）
+            summary_parts: list[str] = []
+            if normalized_content:
+                summary_parts.append(f'**回复内容**: {normalized_content[:100]}{"..." if len(normalized_content) > 100 else ""}')
+            if embed:
+                embed_summary = embed.title or embed.description or "单 Embed"
+                summary_parts.append(f'**Embed**: {embed_summary[:100]}{"..." if len(embed_summary) > 100 else ""}')
             await interaction.followup.send(
                 f'✅ 已成功回复消息！\n'
                 f'**目标服务器**: {target_guild.name}\n'
                 f'**目标频道**: {target_channel.mention}\n'
-                f'**回复内容**: {content[:100]}{"..." if len(content) > 100 else ""}',
+                + '\n'.join(summary_parts),
                 ephemeral=True
             )
             log_slash_command(interaction, True)
             print(f"👑 管理员 {interaction.user.name} 回复了消息 {message_link}")
 
+        except ValueError as e:
+            await interaction.followup.send(f'❌ {e}', ephemeral=True)
+            log_slash_command(interaction, False)
         except discord.HTTPException as e:
             await interaction.followup.send(f'❌ 发送消息时发生错误: {e}', ephemeral=True)
             log_slash_command(interaction, False)
@@ -271,5 +329,4 @@ class SlashSend(commands.Cog):
             log_slash_command(interaction, False)
 
 async def setup(bot: commands.Bot):
-    """设置并加载 SlashSend Cog"""
-    await bot.add_cog(SlashSend(bot))
+    await bot.add_cog(SendCog(bot))

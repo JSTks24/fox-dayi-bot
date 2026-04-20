@@ -264,30 +264,11 @@ class BroadcastSchedulerMixin:
                 logger.error(traceback.format_exc())
 
     def replace_macros(self, content: str, task_id: str) -> str:
-        """替换消息中的宏变量"""
+        """规范化广播文本，仅保留 ``\\n`` 换行兼容。"""
         try:
-            # 替换换行符
-            content = content.replace('\\n', '\n')
-            
-            # 替换时间宏
-            current_time = datetime.now(self.tz_shanghai).strftime("%H:%M")
-            content = content.replace("{{time}}", current_time)
-            
-            # 获取并更新计数
-            if task_id not in self.stats:
-                self.stats[task_id] = {
-                    'daily_count': 0,
-                    'last_time_sent': '',
-                    'last_date': datetime.now(self.tz_shanghai).strftime("%Y%m%d")
-                }
-            
-            daily_count = self.stats[task_id].get('daily_count', 0) + 1
-            content = content.replace("{{count}}", str(daily_count))
-            
-            return content
-            
+            return content.replace('\\n', '\n')
         except Exception as e:
-            logger.error(f"替换宏变量失败: {e}")
+            logger.error(f"规范化广播内容失败: {e}")
             return content
 
     def update_stats(self, task_id: str) -> None:

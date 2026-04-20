@@ -1,9 +1,8 @@
 import asyncio
-import json
 import os
 import tempfile
-import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from cogs.appdayi import AppDayi
@@ -21,30 +20,30 @@ class DummyTree:
 class DummyBot:
     def __init__(self):
         self.tree = DummyTree()
+        self.admins = []
+        self.trusted_users = []
+        self.openai_client = None
 
 
 class AppDayiPhase3Tests(unittest.TestCase):
     def setUp(self):
         self.cog = AppDayi(DummyBot())
 
-    def test_banlist_cache_refreshes_when_mtime_changes(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            banlist_path = os.path.join(temp_dir, "banlist.json")
-            first_payload = {"banlist": [{"ID": "42", "reason": "first", "unbanned_at": int(time.time()) + 3600}]}
-            second_payload = {"banlist": [{"ID": "42", "reason": "second", "unbanned_at": int(time.time()) + 3600}]}
+    def test_quick_dayi_no_longer_blocks_target_user_with_banlist(self):
+        bot = DummyBot()
+        bot.trusted_users = [7]
+        cog = AppDayi(bot)
+        interaction = SimpleNamespace(user=SimpleNamespace(id=7))
+        message = SimpleNamespace(author=SimpleNamespace(id=42, name="target"), attachments=[])
+        send_public_error = mock.AsyncMock()
+        cog._send_public_error = send_public_error
 
-            with open(banlist_path, "w", encoding="utf-8") as fh:
-                json.dump(first_payload, fh)
+        with mock.patch("cogs.appdayi.core.safe_defer", new=mock.AsyncMock()):
+            asyncio.run(cog.quick_dayi(interaction, message))
 
-            with mock.patch.object(self.cog, "_get_banlist_path", return_value=banlist_path):
-                self.assertEqual(self.cog._get_active_ban_entry("42")["reason"], "first")
-
-                with open(banlist_path, "w", encoding="utf-8") as fh:
-                    json.dump(second_payload, fh)
-                updated_mtime = os.path.getmtime(banlist_path) + 5
-                os.utime(banlist_path, (updated_mtime, updated_mtime))
-
-                self.assertEqual(self.cog._get_active_ban_entry("42")["reason"], "second")
+        send_public_error.assert_awaited_once()
+        self.assertEqual(send_public_error.await_args.args[1], message)
+        self.assertIn("AI 服务尚未正确初始化", send_public_error.await_args.args[2])
 
     def test_default_prompt_cache_refreshes_when_mtime_changes(self):
         with tempfile.TemporaryDirectory() as temp_dir:

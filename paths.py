@@ -42,8 +42,6 @@ CONFIG_DIR = DATA_DIR / "config"
 ROLE_SYNC_CONFIG_FILE = CONFIG_DIR / "role_sync_config.json"
 QUICK_PUNISH_SYNC_CONFIG_FILE = CONFIG_DIR / "quick_punish_sync.json"
 
-BANLIST_FILE = DATA_DIR / "banlist.json"
-
 TEMP_DIR = RUNTIME_DIR / "temp"
 APP_TEMP_DIR = TEMP_DIR / "app"
 CONTEXT_TEMP_DIR = TEMP_DIR / "context"
@@ -87,7 +85,6 @@ PROJECT_DIRS = (
 LEGACY_PATHS = (
     ROOT_DIR / "users.db",
     ROOT_DIR / "quick_punish.db",
-    ROOT_DIR / "banlist.json",
     ROOT_DIR / "api_table" / "good.json",
     ROOT_DIR / "api_table" / "bad.json",
     ROOT_DIR / "api_table" / "prompt.txt",

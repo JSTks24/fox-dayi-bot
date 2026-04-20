@@ -2,18 +2,18 @@ import sqlite3
 import unittest
 from pathlib import Path
 
-from cogs import sync_punish_data, users_db
+from cogs import permission, sync_punish_data
 from tests.conftest import DummyBot, create_users_db, temporary_workdir
 
 
-class UsersDatabaseCogTests(unittest.TestCase):
+class PermissionCogTests(unittest.TestCase):
     def test_apply_permission_changes_sync_adds_and_removes_trusted_users(self):
-        cog = users_db.UsersDatabaseCog(DummyBot())
+        cog = permission.PermissionCog(DummyBot())
 
         with temporary_workdir() as temp_dir:
-            original_path = users_db.USERS_DB_PATH
-            users_db.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
-            db_path = Path(users_db.USERS_DB_PATH)
+            original_path = permission.USERS_DB_PATH
+            permission.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
+            db_path = Path(permission.USERS_DB_PATH)
             try:
                 create_users_db(db_path, admins=(1,), trusted_users=(2,))
 
@@ -37,19 +37,19 @@ class UsersDatabaseCogTests(unittest.TestCase):
                 with sqlite3.connect(db_path) as conn:
                     trusted_users_ids = sorted(row[0] for row in conn.execute("SELECT id FROM trusted_users"))
             finally:
-                users_db.USERS_DB_PATH = original_path
+                permission.USERS_DB_PATH = original_path
 
         self.assertEqual((success, already_exists, not_exists), (["3"], [], ["9"]))
         self.assertEqual(trusted_users_ids, ["2"])
 
     def test_apply_permission_changes_sync_blocks_removing_other_admins(self):
-        cog = users_db.UsersDatabaseCog(DummyBot())
+        cog = permission.PermissionCog(DummyBot())
 
         with temporary_workdir() as temp_dir:
-            original_path = users_db.USERS_DB_PATH
-            users_db.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
+            original_path = permission.USERS_DB_PATH
+            permission.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
             try:
-                create_users_db(Path(users_db.USERS_DB_PATH), admins=(1, 2))
+                create_users_db(Path(permission.USERS_DB_PATH), admins=(1, 2))
 
                 with self.assertRaises(PermissionError):
                     cog._apply_permission_changes_sync(
@@ -60,7 +60,7 @@ class UsersDatabaseCogTests(unittest.TestCase):
                         operator_name="admin",
                     )
             finally:
-                users_db.USERS_DB_PATH = original_path
+                permission.USERS_DB_PATH = original_path
 
 
 class SyncPunishDataTests(unittest.TestCase):

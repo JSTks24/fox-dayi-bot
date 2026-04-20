@@ -3,13 +3,12 @@ from __future__ import annotations
 import discord
 from discord.ext import commands
 from discord import app_commands
-import os
 import re
 import io
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from cogs.utils import CooldownManager, log_slash_command, safe_defer as _safe_defer
+from cogs.utils import log_slash_command, safe_defer as _safe_defer
 
 from .db import _ensure_dirs_and_db
 from .panel import fox14_tag_context
@@ -18,39 +17,6 @@ class TaggerCoreMixin:
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         _ensure_dirs_and_db()
-
-        # ---- 告警功能配置与冷却窗口（内存） ----
-        self._alert_enabled: bool = True
-        self._target_channel_id: int | None = None
-        self._alert_channel_id: int | None = None
-        self._min_interval_minutes: int = 30
-        
-        try:
-            target_str = os.getenv("TARGET_CHANNEL_OR_THREAD", "").strip()
-            alert_str = os.getenv("ALERT_CHANNEL_OR_THREAD", "").strip()
-            interval_str = os.getenv("MIN_INTERVAL", "").strip()
-            
-            if target_str:
-                self._target_channel_id = int(target_str)
-            
-            if alert_str:
-                self._alert_channel_id = int(alert_str)
-            else:
-                self._alert_enabled = False
-                print("[tagger] 未配置 ALERT_CHANNEL_OR_THREAD，告警功能禁用")
-            
-            if interval_str:
-                # 至少 1 分钟，避免 0 导致频繁告警
-                self._min_interval_minutes = max(1, int(interval_str))
-            
-        except Exception as e:
-            self._alert_enabled = False
-            print(f"[tagger] 解析 .env 失败：{e}，告警功能禁用")
-
-        self._alert_cooldowns = CooldownManager(default_seconds=self._min_interval_minutes * 60)
-        
-        if self._alert_enabled:
-            print(f"[tagger] Fox14 标记告警已启用：ALERT={self._alert_channel_id}, MIN_INTERVAL={self._min_interval_minutes}min, TARGET(不参与触发)={self._target_channel_id}")
 
         # 后台任务：每日北京时间0点过期扫描
         self._expiry_task: asyncio.Task | None = None

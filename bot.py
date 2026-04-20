@@ -109,6 +109,7 @@ class ParallelLimitError(app_commands.AppCommandError):
 
 bot.parallel_limit_error_cls = ParallelLimitError
 NON_EXTENSION_MODULES = {"__init__.py", "utils.py"}
+SKIPPED_COG_DIRECTORIES = {"deprecated"}
 USERS_DB_PATH = str(USERS_DB)
 
 
@@ -291,7 +292,7 @@ async def load_cogs():
         if entry.endswith(".py") and entry not in NON_EXTENSION_MODULES:
             extension_names.append(f"{cogs_dir}.{entry[:-3]}")
             continue
-        if entry.startswith("__") or not os.path.isdir(entry_path):
+        if entry.startswith("__") or entry in SKIPPED_COG_DIRECTORIES or not os.path.isdir(entry_path):
             continue
         if os.path.exists(os.path.join(entry_path, "__init__.py")):
             extension_names.append(f"{cogs_dir}.{entry}")

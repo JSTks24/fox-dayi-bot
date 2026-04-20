@@ -12,7 +12,7 @@ import openai
 from discord import app_commands
 from discord.ext import commands
 from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image, get_file_size_kb
-from paths import APP_TEMP_DIR, BANLIST_FILE, PROMPT_DIR, SAVE_DIR
+from paths import APP_TEMP_DIR, PROMPT_DIR, SAVE_DIR
 
 from .stream import DEFAULT_SYSTEM_PROMPT, MAX_IMAGE_ATTACHMENTS, PUBLIC_ALLOWED_MENTIONS, REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT, STATUS_PROCESSING_IMAGES, STATUS_RECEIVED, STATUS_REQUESTING_AI, STATUS_RESOLVING_CONTEXT, STREAM_TIMEOUT_SECONDS, PublicStreamReply
 
@@ -26,8 +26,6 @@ class AppDayiCoreMixin:
         self.cooldown_duration = 30
         self._default_prompt_cache: str | None = None
         self._default_prompt_cache_mtime: float | None = None
-        self._banlist_cache: dict[str, Any] | None = None
-        self._banlist_cache_mtime: float | None = None
 
         self.ctx_menu = app_commands.ContextMenu(
             name="快速答疑",
@@ -89,68 +87,6 @@ class AppDayiCoreMixin:
             await self._reply_public_text(message, content)
 
         await self._acknowledge_public_result(interaction, "ℹ️ 错误信息已公开发送到频道。")
-
-    def _get_banlist_path(self) -> str:
-        return os.fspath(BANLIST_FILE)
-
-    def _load_banlist_data(self) -> dict[str, Any]:
-        banlist_path = self._get_banlist_path()
-        try:
-            current_mtime = os.path.getmtime(banlist_path)
-        except FileNotFoundError:
-            print("⚠️ banlist.json 文件不存在，跳过封禁检查")
-            self._banlist_cache = {}
-            self._banlist_cache_mtime = None
-            return self._banlist_cache
-        except Exception as e:
-            print(f"❌ 读取 banlist.json 修改时间失败: {e}")
-            return self._banlist_cache or {}
-
-        if self._banlist_cache is not None and current_mtime == self._banlist_cache_mtime:
-            return self._banlist_cache
-
-        try:
-            with open(banlist_path, encoding="utf-8") as f:
-                banlist_data = json.load(f)
-        except json.JSONDecodeError as e:
-            print(f"❌ 解析 banlist.json 失败: {e}")
-            self._banlist_cache = {}
-            self._banlist_cache_mtime = current_mtime
-            return self._banlist_cache
-        except Exception as e:
-            print(f"❌ 封禁检查出错: {e}")
-            return self._banlist_cache or {}
-
-        self._banlist_cache = banlist_data if isinstance(banlist_data, dict) else {}
-        self._banlist_cache_mtime = current_mtime
-        return self._banlist_cache
-
-    def _get_active_ban_entry(self, target_user_id: str) -> dict[str, Any] | None:
-        banlist_data = self._load_banlist_data()
-        current_timestamp = datetime.now().timestamp()
-        for ban_entry in banlist_data.get("banlist", []):
-            if ban_entry.get("ID") != target_user_id:
-                continue
-
-            try:
-                unbanned_at = int(ban_entry["unbanned_at"])
-            except (KeyError, TypeError, ValueError):
-                continue
-
-            if current_timestamp < unbanned_at:
-                return ban_entry
-
-        return None
-
-    def _format_ban_message(self, ban_entry: dict[str, Any]) -> str:
-        unbanned_timestamp = int(ban_entry["unbanned_at"])
-        formatted_date = datetime.fromtimestamp(unbanned_timestamp).strftime("%Y年%m月%d日 %H:%M:%S")
-        return (
-            "❌ 该用户已被开发者封禁\n\n"
-            f"用户ID：{ban_entry['ID']}\n"
-            f"封禁原因：{ban_entry['reason']}\n"
-            f"解封时间：{formatted_date}"
-        )
 
     def _get_display_model_name(self) -> str:
         random_model_names = os.getenv("RANDOM_MODEL_NAMES", "")
@@ -412,8 +348,6 @@ class AppDayiCoreMixin:
         await safe_defer(interaction)
 
         user_id = interaction.user.id
-        target_user = message.author
-        target_user_id = str(target_user.id)
         current_image_attachments = self._get_message_image_attachments(message)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -428,17 +362,6 @@ class AppDayiCoreMixin:
         client = getattr(self.bot, "openai_client", None)
 
         try:
-            banned_user_info = self._get_active_ban_entry(target_user_id)
-            if banned_user_info:
-                ban_message = self._format_ban_message(banned_user_info)
-                await self._send_public_error(interaction, message, ban_message)
-                print(f"🚫 尝试对封禁用户 {target_user_id} ({target_user.name}) 的消息使用快速答疑")
-                print(f"   封禁原因: {banned_user_info['reason']}")
-                print(f"   解封时间: {datetime.fromtimestamp(int(banned_user_info['unbanned_at'])).strftime('%Y年%m月%d日 %H:%M:%S')}")
-                return
-
-            print(f"✅ 用户 {target_user_id} ({target_user.name}) 未被封禁")
-
             admins = getattr(self.bot, "admins", [])
             trusted_users = getattr(self.bot, "trusted_users", [])
 

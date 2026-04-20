@@ -12,7 +12,7 @@ PERMISSION_GROUPS = ("admins", "trusted_users")
 USERS_DB_PATH = str(USERS_DB)
 
 
-class UsersDatabaseCog(commands.Cog):
+class PermissionCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -198,11 +198,11 @@ class UsersDatabaseCog(commands.Cog):
                 ephemeral=True,
             )
         else:
-            print(f"未处理的斜杠命令错误 in UsersDatabaseCog: {error}")
+            print(f"未处理的斜杠命令错误 in PermissionCog: {error}")
             await interaction.response.send_message("❌ 执行命令时发生未知错误。", ephemeral=True)
 
         log_slash_command(interaction, False)
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(UsersDatabaseCog(bot))
+    await bot.add_cog(PermissionCog(bot))

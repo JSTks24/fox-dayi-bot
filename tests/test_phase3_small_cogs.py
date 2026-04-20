@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytz
 
-from cogs import broadcast, debug_role, guild_guard, slashsend
+from cogs import broadcast, guild_guard, send
 
 
 class BroadcastPhase3Tests(unittest.TestCase):
@@ -27,8 +27,10 @@ class BroadcastPhase3Tests(unittest.TestCase):
         self.assertEqual(broadcast.BroadcastCog.reload_broadcast.name, "broadcast_reload")
         self.assertEqual(broadcast.BroadcastCog.broadcast_status.name, "broadcast_status")
 
-    def test_debug_role_is_guild_only(self):
-        self.assertTrue(debug_role.DebugRole.debug_role.guild_only)
+    def test_replace_macros_only_normalizes_newlines(self):
+        cog = object.__new__(broadcast.BroadcastCog)
+        normalized = broadcast.BroadcastCog.replace_macros(cog, r"第一行\n{{time}}-{{count}}", "task-1")
+        self.assertEqual(normalized, "第一行\n{{time}}-{{count}}")
 
 
 class BroadcastLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -64,17 +66,23 @@ class GuildGuardPhase3Tests(unittest.IsolatedAsyncioTestCase):
         guild.leave.assert_not_awaited()
 
 
-class SlashSendPhase3Tests(unittest.IsolatedAsyncioTestCase):
+class SendPhase3Tests(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_target_channel_falls_back_to_fetch_channel(self):
         fetched_channel = SimpleNamespace(id=456, guild=SimpleNamespace(id=123))
         bot = SimpleNamespace(fetch_channel=mock.AsyncMock(return_value=fetched_channel))
-        cog = slashsend.SlashSend(bot)
+        cog = send.SendCog(bot)
         guild = SimpleNamespace(id=123, get_channel=mock.Mock(return_value=None))
 
         resolved = await cog.resolve_target_channel(guild, 456)
 
         self.assertIs(resolved, fetched_channel)
         bot.fetch_channel.assert_awaited_once_with(456)
+
+    def test_build_embed_supports_hex_color(self):
+        embed = send.SendCog._build_embed("标题", "描述", "#112233")
+        self.assertEqual(embed.title, "标题")
+        self.assertEqual(embed.description, "描述")
+        self.assertEqual(embed.colour.value, 0x112233)
 
 
 if __name__ == "__main__":
