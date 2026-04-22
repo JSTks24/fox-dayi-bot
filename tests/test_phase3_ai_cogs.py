@@ -85,7 +85,7 @@ class SummaryPhase3Tests(unittest.TestCase):
         self.cog = Summary(DummyBot())
 
     def test_summary_model_prefers_summary_model_then_openai_model(self):
-        with mock.patch.dict(os.environ, {"OPENAI_MODEL": "base-model"}, clear=False):
+        with mock.patch.dict(os.environ, {"OPENAI_MODEL": "base-model", "SUMMARY_MODEL": ""}, clear=False):
             self.assertEqual(self.cog._get_summary_model(), "base-model")
 
         with mock.patch.dict(os.environ, {"OPENAI_MODEL": "base-model", "SUMMARY_MODEL": "summary-model"}, clear=False):
