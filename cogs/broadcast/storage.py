@@ -14,14 +14,32 @@ class BroadcastStorageMixin:
         try:
             if os.path.exists(self.config_path):
                 with open(self.config_path, encoding='utf-8') as f:
-                    self.config = json.load(f)
+                    raw_config = json.load(f)
+
+                # 提取白名单频道（顶层特殊字段）
+                self.allowed_channels: list[int] = raw_config.pop('allowed_channels', [])
+
+                self.config = {}
+                for task_name, task_config in raw_config.items():
+                    if not isinstance(task_config, dict):
+                        continue
+                    if 'DAILY_TIMES' in task_config:
+                        logger.warning(
+                            f"任务 {task_name} 使用已弃用的 DAILY_TIMES 模式，已跳过加载。"
+                            f"请手动迁移为 INTERVAL_MINUTES 模式。"
+                        )
+                        continue
+                    self.config[task_name] = task_config
+
                 logger.info(f"已加载 {len(self.config)} 个广播任务配置")
             else:
                 logger.warning(f"配置文件不存在: {self.config_path}")
                 self.config = {}
+                self.allowed_channels = []
         except Exception as e:
             logger.error(f"加载配置文件失败: {e}")
             self.config = {}
+            self.allowed_channels = getattr(self, 'allowed_channels', [])
 
     def load_stats(self) -> None:
         """加载统计数据文件"""
@@ -74,10 +92,12 @@ class BroadcastStorageMixin:
                     logger.error(f"重置任务 {task_id} 计数失败: {e}")
 
     def save_config(self) -> None:
-        """保存配置文件"""
+        """保存配置文件（包含白名单频道）"""
         try:
+            data = dict(self.config)
+            data['allowed_channels'] = getattr(self, 'allowed_channels', [])
             with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=4, ensure_ascii=False)
+                json.dump(data, f, indent=4, ensure_ascii=False)
             logger.debug("配置文件已保存")
         except Exception as e:
             logger.error(f"保存配置文件失败: {e}")

@@ -25,10 +25,12 @@ class BroadcastCog(
         self.config: dict[str, dict] = {}
         self.stats: dict[str, dict] = {}
         self.active_tasks: dict[str, tasks.Loop] = {}
+        self.allowed_channels: list[int] = []
         self.config_path = str(BROADCAST_THREADS_FILE)
         self.stats_path = str(BROADCAST_STATS_FILE)
         self.lock = asyncio.Lock()  # 防止并发修改
         self.tz_shanghai = pytz.timezone('Asia/Shanghai')
+        self._author_name_cache: dict[str, str] = {}
         
         # 确保目录存在
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)

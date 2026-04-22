@@ -13,13 +13,13 @@ class RecognizeUrlTests(unittest.TestCase):
 
         self.assertEqual(
             cog._normalize_url("https://Example.com:443/api/v1/?q=1#frag"),
-            "example.com/api/v1",
+            ("example.com", "/api/v1"),
         )
         self.assertEqual(
             cog._normalize_url("http://Example.com:8080/path/"),
-            "example.com:8080/path",
+            ("example.com:8080", "/path"),
         )
-        self.assertEqual(cog._normalize_url("Example.com/path/"), "example.com/path")
+        self.assertEqual(cog._normalize_url("Example.com/path/"), ("example.com", "/path"))
 
     def test_save_json_writes_expected_content(self):
         cog = object.__new__(recognize_url.RecognizeURL)
