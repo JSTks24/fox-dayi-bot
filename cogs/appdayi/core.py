@@ -33,9 +33,16 @@ class AppDayiCoreMixin:
         )
         self.bot.tree.add_command(self.ctx_menu)
 
+        self.ctx_menu_search = app_commands.ContextMenu(
+            name="联网答疑",
+            callback=self.quick_dayi_search,
+        )
+        self.bot.tree.add_command(self.ctx_menu_search)
+
     async def cog_unload(self):
         """Cog 卸载时移除命令"""
         self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
+        self.bot.tree.remove_command(self.ctx_menu_search.name, type=self.ctx_menu_search.type)
 
     def _check_and_update_cooldown(self, message_id: int) -> tuple[bool, int]:
         """
@@ -255,9 +262,11 @@ class AppDayiCoreMixin:
         client: openai.AsyncOpenAI,
         messages: list[dict[str, Any]],
         public_session: PublicStreamReply,
+        *,
+        model: str | None = None,
     ) -> bool:
         stream = await client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL"),
+            model=model or os.getenv("OPENAI_MODEL"),
             messages=messages,
             temperature=1.0,
             stream=True,
@@ -286,9 +295,11 @@ class AppDayiCoreMixin:
         self,
         client: openai.AsyncOpenAI,
         messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
     ) -> str:
         response = await client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL"),
+            model=model or os.getenv("OPENAI_MODEL"),
             messages=messages,
             temperature=1.0,
             stream=False,
@@ -309,14 +320,16 @@ class AppDayiCoreMixin:
         client: openai.AsyncOpenAI,
         messages: list[dict[str, Any]],
         public_session: PublicStreamReply,
+        *,
+        model: str | None = None,
     ) -> str:
         try:
-            received_stream_text = await self._stream_ai_response(client, messages, public_session)
+            received_stream_text = await self._stream_ai_response(client, messages, public_session, model=model)
         except Exception as e:
             if public_session.has_content:
                 raise
             print(f"⚠️ [快速答疑] 流式请求失败，回退到非流式: {type(e).__name__}: {e}")
-            fallback_text = await self._create_non_stream_completion(client, messages)
+            fallback_text = await self._create_non_stream_completion(client, messages, model=model)
             if fallback_text:
                 public_session.append(fallback_text)
             return fallback_text
@@ -325,7 +338,7 @@ class AppDayiCoreMixin:
             return public_session.full_text.strip()
 
         print("⚠️ [快速答疑] 流式响应未返回正文，回退到非流式。")
-        fallback_text = await self._create_non_stream_completion(client, messages)
+        fallback_text = await self._create_non_stream_completion(client, messages, model=model)
         if fallback_text:
             public_session.append(fallback_text)
         return fallback_text
@@ -345,7 +358,24 @@ class AppDayiCoreMixin:
 
     async def quick_dayi(self, interaction: discord.Interaction, message: discord.Message):
         """对消息使用快速答疑，并通过公开普通消息流式回复。"""
+        await self._run_dayi(interaction, message, model_env_key="OPENAI_MODEL")
+
+    async def quick_dayi_search(self, interaction: discord.Interaction, message: discord.Message):
+        """对消息使用联网答疑，使用联网搜索模型并通过公开普通消息流式回复。"""
+        await self._run_dayi(interaction, message, model_env_key="OPENAI_SEARCH_MODEL")
+
+    async def _run_dayi(self, interaction: discord.Interaction, message: discord.Message, *, model_env_key: str):
+        """快速答疑与联网答疑的共享实现。"""
         await safe_defer(interaction)
+
+        model_name = os.getenv(model_env_key)
+        if not model_name:
+            await self._send_public_error(
+                interaction,
+                message,
+                f"❌ 环境变量 {model_env_key} 未配置，请联系管理员。",
+            )
+            return
 
         user_id = interaction.user.id
         current_image_attachments = self._get_message_image_attachments(message)
@@ -467,7 +497,7 @@ class AppDayiCoreMixin:
             current_text = self._get_base_user_message_text(message, is_current=True)
 
             print("📤 [API请求] 准备发送请求:")
-            print(f"   - 模型: {os.getenv('OPENAI_MODEL')}")
+            print(f"   - 模型: {model_name}")
             print(f"   - 当前消息文本长度: {len(current_text)} 字符")
             print(f"   - 回复链历史轮数: {len(history_pairs_newest_first)}")
             print(f"   - 上下文消息数: {len(conversation_turns)}")
@@ -477,7 +507,7 @@ class AppDayiCoreMixin:
 
             await public_session.set_status(STATUS_REQUESTING_AI)
             ai_response = await asyncio.wait_for(
-                self._generate_ai_response(client, messages, public_session),
+                self._generate_ai_response(client, messages, public_session, model=model_name),
                 timeout=STREAM_TIMEOUT_SECONDS,
             )
 
