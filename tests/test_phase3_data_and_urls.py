@@ -3,34 +3,37 @@ import threading
 import unittest
 from pathlib import Path
 
-from cogs import get_context, recognize_url, role_sync
+from cogs import get_context, role_sync
 from cogs import pending_reviewer as pending_questions_reviewer
+from cogs.recognize_url.url_matcher import URLMatcher
 from tests.conftest import temporary_workdir
 
 
 class RecognizeUrlTests(unittest.TestCase):
+    def _make_matcher(self) -> URLMatcher:
+        return URLMatcher("dummy_good.json", "dummy_bad.json", "dummy_prompt.txt")
+
     def test_normalize_url_keeps_path_and_non_default_port(self):
-        cog = object.__new__(recognize_url.RecognizeURL)
+        matcher = self._make_matcher()
 
         self.assertEqual(
-            cog._normalize_url("https://Example.com:443/api/v1/?q=1#frag"),
+            matcher.normalize("https://Example.com:443/api/v1/?q=1#frag"),
             ("example.com", "/api/v1"),
         )
         self.assertEqual(
-            cog._normalize_url("http://Example.com:8080/path/"),
+            matcher.normalize("http://Example.com:8080/path/"),
             ("example.com:8080", "/path"),
         )
-        self.assertEqual(cog._normalize_url("Example.com/path/"), ("example.com", "/path"))
+        self.assertEqual(matcher.normalize("Example.com/path/"), ("example.com", "/path"))
 
     def test_save_json_writes_expected_content(self):
-        cog = object.__new__(recognize_url.RecognizeURL)
-        cog._json_write_lock = threading.Lock()
+        matcher = self._make_matcher()
 
         with temporary_workdir() as temp_dir:
             file_path = Path(temp_dir) / "api_table" / "good.json"
             data = {"good": {"example.com/api": ["name", "desc"]}}
 
-            self.assertTrue(cog._save_json(str(file_path), data))
+            self.assertTrue(matcher.save_json(str(file_path), data))
 
             self.assertEqual(json.loads(file_path.read_text(encoding="utf-8")), data)
 
