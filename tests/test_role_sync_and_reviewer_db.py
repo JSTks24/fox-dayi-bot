@@ -2,7 +2,8 @@ import sqlite3
 import unittest
 from pathlib import Path
 
-from cogs import pending_questions_reviewer, role_sync
+from cogs import role_sync
+from cogs import pending_reviewer as pending_questions_reviewer
 from tests.conftest import temporary_workdir
 
 

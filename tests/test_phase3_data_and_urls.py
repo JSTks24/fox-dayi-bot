@@ -3,7 +3,8 @@ import threading
 import unittest
 from pathlib import Path
 
-from cogs import get_context, pending_questions_reviewer, recognize_url, role_sync
+from cogs import get_context, recognize_url, role_sync
+from cogs import pending_reviewer as pending_questions_reviewer
 from tests.conftest import temporary_workdir
 
 

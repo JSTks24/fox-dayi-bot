@@ -1,7 +1,7 @@
 import datetime
 import unittest
 
-from cogs import pending_questions_reviewer
+from cogs import pending_reviewer as pending_questions_reviewer
 
 
 class PendingReviewerTimezoneTests(unittest.TestCase):
