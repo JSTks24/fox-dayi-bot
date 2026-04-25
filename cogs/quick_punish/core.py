@@ -503,32 +503,36 @@ class QuickPunishCoreMixin:
                 pass
             return False, f"执行处罚时出错：{str(e)}", []
 
-    async def _execute_revoke_record(self, interaction: discord.Interaction, user_id: str, record: dict[str, Any]) -> tuple[bool, str]:
-        restore_targets = self._build_restore_targets(record, interaction.guild.id if interaction.guild else None)
-        if not restore_targets:
-            return False, f"在数据库中找不到（{user_id}）的上次处罚移除了什么身份组，可能是由于上次处罚来源于同步，请检查日志频道。"
-
+    async def _execute_revoke_record(self, interaction: discord.Interaction, user_id: str, record: dict[str, Any], restore_roles: bool = True) -> tuple[bool, str]:
         restored_roles: list[int] = []
         failed_roles: list[int] = []
         detail_lines: list[str] = []
 
-        for guild_id, roles in restore_targets.items():
-            guild = self.bot.get_guild(int(guild_id)) if str(guild_id).isdigit() else None
-            if not guild:
-                failed_roles.extend(roles)
-                detail_lines.append(f"❌ {guild_id}: 机器人不在该服务器")
-                continue
+        if restore_roles:
+            restore_targets = self._build_restore_targets(record, interaction.guild.id if interaction.guild else None)
+            if not restore_targets:
+                return False, f"在数据库中找不到（{user_id}）的上次处罚移除了什么身份组，可能是由于上次处罚来源于同步，请检查日志频道。"
 
-            member = await self._resolve_member_in_guild(guild, int(user_id))
-            if not member:
-                failed_roles.extend(roles)
-                detail_lines.append(f"❌ {guild.name}: 用户不在服务器")
-                continue
+            for guild_id, roles in restore_targets.items():
+                guild = self.bot.get_guild(int(guild_id)) if str(guild_id).isdigit() else None
+                if not guild:
+                    failed_roles.extend(roles)
+                    detail_lines.append(f"❌ {guild_id}: 机器人不在该服务器")
+                    continue
 
-            restored, failed = await self.restore_user_roles(member, roles)
-            restored_roles.extend(restored)
-            failed_roles.extend(failed)
-            detail_lines.append(f"✅ {guild.name}: 恢复 {len(restored)} 个，失败 {len(failed)} 个")
+                member = await self._resolve_member_in_guild(guild, int(user_id))
+                if not member:
+                    failed_roles.extend(roles)
+                    detail_lines.append(f"❌ {guild.name}: 用户不在服务器")
+                    continue
+
+                restored, failed = await self.restore_user_roles(member, roles)
+                restored_roles.extend(restored)
+                failed_roles.extend(failed)
+                detail_lines.append(f"✅ {guild.name}: 恢复 {len(restored)} 个，失败 {len(failed)} 个")
+        else:
+            restore_targets = {}
+            detail_lines.append("⏭️ 已跳过身份组恢复")
 
         success = await self.revoke_punishment(record['id'])
         if not success:

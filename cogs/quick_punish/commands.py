@@ -297,12 +297,13 @@ class QuickPunishConfirmView(discord.ui.View):
 class RevokeConfirmView(discord.ui.View):
     """撤销二次确认：当最近记录是sync时，确认是否回溯撤销local记录"""
 
-    def __init__(self, cog, target_user_id: str, latest_record: dict[str, Any], revoke_record: dict[str, Any]):
+    def __init__(self, cog, target_user_id: str, latest_record: dict[str, Any], revoke_record: dict[str, Any], restore_roles: bool = True):
         super().__init__(timeout=180)
         self.cog = cog
         self.target_user_id = target_user_id
         self.latest_record = latest_record
         self.revoke_record = revoke_record
+        self.restore_roles = restore_roles
 
     def _disable_all(self):
         for child in self.children:
@@ -319,7 +320,8 @@ class RevokeConfirmView(discord.ui.View):
         success, message = await self.cog._execute_revoke_record(
             interaction=interaction,
             user_id=self.target_user_id,
-            record=self.revoke_record
+            record=self.revoke_record,
+            restore_roles=self.restore_roles
         )
 
         result_embed = discord.Embed(
@@ -562,9 +564,12 @@ class QuickPunishCommandsMixin:
             )
 
     @app_commands.command(name="快速处罚-撤销", description="撤销最近一次的快速处罚")
-    @app_commands.describe(user_id="要撤销处罚的用户ID")
+    @app_commands.describe(
+        user_id="要撤销处罚的用户ID",
+        restore_roles="是否恢复身份组（默认：是）"
+    )
     @app_commands.guild_only()
-    async def quick_punish_revoke(self, interaction: discord.Interaction, user_id: str):
+    async def quick_punish_revoke(self, interaction: discord.Interaction, user_id: str, restore_roles: bool = True):
         """撤销快速处罚命令"""
         await safe_defer(interaction)
 
@@ -634,7 +639,8 @@ class QuickPunishCommandsMixin:
                 cog=self,
                 target_user_id=user_id,
                 latest_record=latest_record,
-                revoke_record=local_record
+                revoke_record=local_record,
+                restore_roles=restore_roles
             )
             await interaction.followup.send(embed=warn_embed, view=view, ephemeral=True)
             return
@@ -654,6 +660,7 @@ class QuickPunishCommandsMixin:
         _, message = await self._execute_revoke_record(
             interaction=interaction,
             user_id=user_id,
-            record=target_record
+            record=target_record,
+            restore_roles=restore_roles
         )
         await interaction.followup.send(message, ephemeral=True)
