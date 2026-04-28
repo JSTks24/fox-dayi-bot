@@ -94,9 +94,9 @@ class URLCheckCog(commands.Cog):
             base64_image = encode_image_to_base64(compressed_path)
 
             messages = [
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": [
-                    {"type": "image_url", "image_url": {"url": base64_image}}
+                    {"type": "text", "text": system_prompt},
+                    {"type": "image_url", "image_url": {"url": base64_image}},
                 ]}
             ]
 
