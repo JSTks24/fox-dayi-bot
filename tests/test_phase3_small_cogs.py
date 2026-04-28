@@ -1,10 +1,8 @@
 import os
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
-
-import pytz
 
 from cogs import broadcast, guild_guard, send, wiki_search
 
@@ -56,9 +54,9 @@ class BroadcastPhase3Tests(unittest.TestCase):
     def test_interval_first_delay_uses_remaining_time(self):
         cog = object.__new__(broadcast.BroadcastCog)
         cog.stats = {"task-1": {"last_time_sent": "100000"}}
-        cog.tz_shanghai = pytz.timezone("Asia/Shanghai")
+        cog.tz_shanghai = timezone(timedelta(hours=8), name="Asia/Shanghai")
 
-        now = cog.tz_shanghai.localize(datetime(2026, 4, 19, 10, 5, 0))
+        now = datetime(2026, 4, 19, 10, 5, 0, tzinfo=cog.tz_shanghai)
         delay = cog.get_interval_first_delay_seconds(
             {"id": "task-1", "INTERVAL_MINUTES": "10"},
             now=now,

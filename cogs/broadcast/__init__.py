@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from discord.ext import commands as discord_commands, tasks
 import asyncio
-import os
-import pytz
 import logging
+import os
+from datetime import timedelta, timezone
+
+from discord.ext import commands as discord_commands, tasks
 
 from .commands import BroadcastCommandsMixin
 from .scheduler import BroadcastSchedulerMixin
@@ -29,7 +30,7 @@ class BroadcastCog(
         self.config_path = str(BROADCAST_THREADS_FILE)
         self.stats_path = str(BROADCAST_STATS_FILE)
         self.lock = asyncio.Lock()  # 防止并发修改
-        self.tz_shanghai = pytz.timezone('Asia/Shanghai')
+        self.tz_shanghai = timezone(timedelta(hours=8), name="Asia/Shanghai")
         self._author_name_cache: dict[str, str] = {}
         
         # 确保目录存在
