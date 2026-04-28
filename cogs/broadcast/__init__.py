@@ -45,7 +45,7 @@ class BroadcastCog(
         """Start background tasks after the cog is fully loaded."""
         if not self.auto_save.is_running():
             self.auto_save.start()
-        await self.start_all_tasks()
+        self.bot.loop.create_task(self.start_all_tasks())
 
 
     def cog_unload(self):
