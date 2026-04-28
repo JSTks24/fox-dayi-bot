@@ -8,7 +8,7 @@ import io
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from cogs.utils import log_slash_command, safe_defer as _safe_defer
+from cogs.utils import log_slash_command, remove_guild_scoped_context_menus, safe_defer as _safe_defer
 
 from .db import _ensure_dirs_and_db
 from .panel import fox14_tag_context
@@ -30,7 +30,7 @@ class TaggerCoreMixin:
         # 取消后台任务
         if self._expiry_task and not self._expiry_task.done():
             self._expiry_task.cancel()
-        self.bot.tree.remove_command(fox14_tag_context.name, type=fox14_tag_context.type)
+        remove_guild_scoped_context_menus(self.bot.tree, [fox14_tag_context])
 
     def _has_admin_or_trusted(self, interaction: discord.Interaction) -> bool:
         """

@@ -4,7 +4,14 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest import mock
 
+import cogs.quick_punish as quick_punish
+import cogs.tagger as tagger
 from cogs import broadcast, guild_guard, send, wiki_search
+from cogs.utils import (
+    get_bot_should_guild_objects,
+    register_guild_scoped_context_menus,
+    remove_guild_scoped_context_menus,
+)
 
 
 class DummyWikiResponse:
@@ -168,6 +175,50 @@ class WikiSearchCooldownTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             second_call["content"],
             "⏳ 你当前为普通用户，/问题搜索冷却为 30 秒，还需等待 30 秒后再试。",
+        )
+
+
+class GuildScopedContextMenuTests(unittest.TestCase):
+    def test_get_bot_should_guild_objects_dedupes_and_reports_invalid_items(self):
+        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111, 222, 111, bad"}, clear=False):
+            guilds, invalid_items = get_bot_should_guild_objects()
+
+        self.assertEqual([guild.id for guild in guilds], [111, 222])
+        self.assertEqual(invalid_items, ["bad"])
+
+    def test_register_guild_scoped_context_menus_adds_each_command_per_guild(self):
+        tree = SimpleNamespace(add_command=mock.Mock())
+        commands = [
+            quick_punish.quick_punish_context,
+            quick_punish.remote_quick_punish_context,
+            tagger.fox14_tag_context,
+        ]
+
+        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111,222"}, clear=False):
+            guild_ids = register_guild_scoped_context_menus(tree, commands, label="Test")
+
+        self.assertEqual(guild_ids, [111, 222])
+        self.assertEqual(tree.add_command.call_count, 6)
+        self.assertEqual(
+            [call.kwargs["guild"].id for call in tree.add_command.call_args_list],
+            [111, 111, 111, 222, 222, 222],
+        )
+
+    def test_remove_guild_scoped_context_menus_removes_each_command_per_guild(self):
+        tree = SimpleNamespace(remove_command=mock.Mock())
+        commands = [
+            quick_punish.quick_punish_context,
+            quick_punish.remote_quick_punish_context,
+            tagger.fox14_tag_context,
+        ]
+
+        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111,222"}, clear=False):
+            remove_guild_scoped_context_menus(tree, commands)
+
+        self.assertEqual(tree.remove_command.call_count, 6)
+        self.assertEqual(
+            [call.kwargs["guild"].id for call in tree.remove_command.call_args_list],
+            [111, 111, 111, 222, 222, 222],
         )
 
 

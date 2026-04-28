@@ -13,7 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from cogs.utils import log_slash_command
+from cogs.utils import get_bot_should_guild_objects, log_slash_command
 from paths import USERS_DB
 
 load_dotenv()
@@ -175,11 +175,22 @@ async def on_ready():
     print(f"👑 管理员ID: {bot.admins}")
     print(f"🤝 受信任用户ID: {bot.trusted_users}")
 
+    command_scope_guilds, invalid_scope_items = get_bot_should_guild_objects()
+    if invalid_scope_items:
+        print(f"⚠️ BOT_SHOULD_IN_GUILD_IDS 中存在无效项: {', '.join(invalid_scope_items[:10])}")
+
     try:
         synced = await bot.tree.sync()
-        print(f"✅ 已同步 {len(synced)} 个斜杠命令")
+        print(f"✅ 已同步 {len(synced)} 个全局应用命令")
     except Exception as exc:
-        print(f"❌ 同步命令失败: {exc}")
+        print(f"❌ 同步全局应用命令失败: {exc}")
+
+    for guild in command_scope_guilds:
+        try:
+            synced = await bot.tree.sync(guild=guild)
+            print(f"✅ 已向服务器 {guild.id} 同步 {len(synced)} 个 guild-scoped 应用命令")
+        except Exception as exc:
+            print(f"❌ 向服务器 {guild.id} 同步 guild-scoped 应用命令失败: {exc}")
 
 
 @bot.tree.command(name="ping", description="显示机器人延迟和系统信息")

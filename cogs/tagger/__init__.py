@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from discord.ext import commands
 
+from cogs.utils import register_guild_scoped_context_menus
 from .alert import TaggerAlertMixin
 from .core import TaggerCoreMixin
 from .db import TaggerDBMixin
@@ -15,4 +16,8 @@ class Fox14Tagger(TaggerAlertMixin, TaggerDBMixin, TaggerCoreMixin, commands.Cog
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Fox14Tagger(bot))
-    bot.tree.add_command(fox14_tag_context)
+    register_guild_scoped_context_menus(
+        bot.tree,
+        [fox14_tag_context],
+        label="Fox14Tagger",
+    )

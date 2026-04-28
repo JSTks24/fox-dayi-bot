@@ -8,6 +8,7 @@ import json
 from typing import Any
 import aiofiles
 
+from cogs.utils import remove_guild_scoped_context_menus
 from .commands import quick_punish_context, remote_quick_punish_context
 from paths import QUICK_PUNISH_SYNC_CONFIG_FILE, XIAOZUOWEN_DIR
 
@@ -43,8 +44,10 @@ class QuickPunishCoreMixin:
         await asyncio.to_thread(self.init_database)
 
     def cog_unload(self):
-        self.bot.tree.remove_command(quick_punish_context.name, type=quick_punish_context.type)
-        self.bot.tree.remove_command(remote_quick_punish_context.name, type=remote_quick_punish_context.type)
+        remove_guild_scoped_context_menus(
+            self.bot.tree,
+            [quick_punish_context, remote_quick_punish_context],
+        )
 
     def _parse_role_ids(self, role_str: str) -> list[int]:
         """解析身份组ID字符串"""
