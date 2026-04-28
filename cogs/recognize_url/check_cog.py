@@ -107,8 +107,9 @@ class URLCheckCog(commands.Cog):
                 client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    temperature=0.1,
-                    max_tokens=8192
+                    temperature=0.5,
+                    max_tokens=8192,
+                    reasoning_effort="none"
                 ),
                 timeout=60.0,
             )
