@@ -108,7 +108,7 @@ class URLCheckCog(commands.Cog):
                     model=model,
                     messages=messages,
                     temperature=0.1,
-                    max_tokens=300
+                    max_tokens=8192
                 ),
                 timeout=60.0,
             )
