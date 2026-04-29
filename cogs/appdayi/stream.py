@@ -18,6 +18,8 @@ PUBLIC_MESSAGE_LIMIT = 1900
 
 STREAM_EDIT_INTERVAL_SECONDS = 3.0
 
+SPINNING_VERB_ROTATION_SECONDS = 5.0
+
 STREAM_POLL_INTERVAL_SECONDS = 0.5
 
 STREAM_TIMEOUT_SECONDS = 180.0
@@ -53,24 +55,43 @@ def _load_json_array(path):
     return []
 
 
-def pick_spinning_status():
-    # type: () -> tuple[str, str]
-    """从 spinning data 中随机选取 emoji 与 verb，返回两个阶段的状态文本。
+def _get_spinning_verbs() -> list[str]:
+    """返回所有可用的 spinning verbs 列表。"""
+    verbs = _load_json_array(_SPINNING_VERBS_PATH)
+    return verbs if verbs else ["处理中"]
+
+
+def _get_spinning_emojis() -> list[str]:
+    """返回所有可用的 spinning emojis 列表。"""
+    emojis = _load_json_array(_SPINNING_EMOJIS_PATH)
+    return emojis if emojis else ["⏳"]
+
+
+def pick_random_verb(*, exclude: str | None = None) -> str:
+    """随机选取一个 verb，尽量避免与 exclude 相同。"""
+    verbs = _get_spinning_verbs()
+    if exclude and len(verbs) > 1:
+        candidates = [v for v in verbs if v != exclude]
+        return random.choice(candidates) if candidates else random.choice(verbs)
+    return random.choice(verbs)
+
+
+def pick_spinning_status() -> tuple[str, str, str, str]:
+    """从 spinning data 中随机选取 emoji 与 verb，返回两个阶段的状态文本、emoji 和 verb。
 
     Returns:
-        (phase1_status, phase2_status)
+        (phase1_status, phase2_status, emoji, verb)
         phase1: "{emoji} {verb}（正在整理上下文和图片...）"
         phase2: "{emoji} {verb}（正在等待AI回复...）"
+        emoji: 选中的 emoji（供后续轮换 verb 时复用）
+        verb: 选中的 verb（供后续轮换时作为初始值）
     """
-    emojis = _load_json_array(_SPINNING_EMOJIS_PATH)
-    verbs = _load_json_array(_SPINNING_VERBS_PATH)
-
-    emoji = random.choice(emojis) if emojis else "⏳"
-    verb = random.choice(verbs) if verbs else "处理中"
+    emoji = random.choice(_get_spinning_emojis())
+    verb = pick_random_verb()
 
     phase1 = f"{emoji} {verb}（正在整理上下文和图片...）"
     phase2 = f"{emoji} {verb}（正在等待AI回复...）"
-    return phase1, phase2
+    return phase1, phase2, emoji, verb
 
 QD_META_LINE_REGEX = re.compile(r"^\s*-# <\|qd-meta\|>(?P<payload>.+?)<\|/qd-meta\|>\s*$", re.MULTILINE)
 
@@ -148,6 +169,9 @@ class PublicStreamReply:
         self._closed = False
         self._flush_task: asyncio.Task | None = None
         self._render_lock = asyncio.Lock()
+        self._verb_rotation_task: asyncio.Task | None = None
+        self._spinning_emoji: str | None = None
+        self._current_verb: str | None = None
 
     @property
     def has_content(self) -> bool:
@@ -188,11 +212,54 @@ class PublicStreamReply:
                 )
                 self.last_edit_at = time.monotonic()
 
+    def start_verb_rotation(self, emoji: str, initial_verb: str) -> None:
+        """启动等待 AI 回复期间的 verb 轮换后台任务。
+
+        每 SPINNING_VERB_ROTATION_SECONDS 秒随机换一个不同的 verb，emoji 保持不变。
+        一旦有流式内容到达（has_content 为 True）或会话关闭，任务自动停止。
+        """
+        self._spinning_emoji = emoji
+        self._current_verb = initial_verb
+        if self._verb_rotation_task is None:
+            self._verb_rotation_task = asyncio.create_task(self._verb_rotation_loop())
+
+    def stop_verb_rotation(self) -> None:
+        """手动停止 verb 轮换任务。"""
+        if self._verb_rotation_task:
+            self._verb_rotation_task.cancel()
+            self._verb_rotation_task = None
+
+    async def _verb_rotation_loop(self) -> None:
+        """后台循环：每 5 秒更换一次等待状态的 verb。"""
+        try:
+            while not self._closed:
+                await asyncio.sleep(SPINNING_VERB_ROTATION_SECONDS)
+
+                # 一旦有流式内容到达，停止轮换
+                if self.has_content or self._closed:
+                    break
+
+                new_verb = pick_random_verb(exclude=self._current_verb)
+                self._current_verb = new_verb
+                new_status = f"{self._spinning_emoji} {new_verb}（正在等待AI回复...）"
+
+                try:
+                    await self.set_status(new_status)
+                except Exception as e:
+                    print(f"⚠️ [快速答疑] verb 轮换编辑失败: {type(e).__name__}: {e}")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._verb_rotation_task = None
+
     def append(self, delta_text: str) -> None:
         if self._closed or not delta_text:
             return
         self.full_text += delta_text
         self._dirty = True
+        # 一旦收到流式内容，停止 verb 轮换
+        if self._verb_rotation_task and self.has_content:
+            self.stop_verb_rotation()
 
     async def flush(self, *, force: bool = False) -> None:
         async with self._render_lock:
@@ -267,6 +334,11 @@ class PublicStreamReply:
             return
 
         self._closed = True
+        if self._verb_rotation_task:
+            self._verb_rotation_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._verb_rotation_task
+            self._verb_rotation_task = None
         if self._flush_task:
             self._flush_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

@@ -449,7 +449,7 @@ class AppDayiCoreMixin:
                 )
                 return
 
-            phase1_status, phase2_status = pick_spinning_status()
+            phase1_status, phase2_status, spinning_emoji, initial_verb = pick_spinning_status()
             public_session = PublicStreamReply(
                 source_message=message,
                 display_model_name=display_model_name,
@@ -506,6 +506,7 @@ class AppDayiCoreMixin:
                 print(f"   - 图片总大小: {sum(get_file_size_kb(path) for path in total_image_paths):.2f} KB")
 
             await public_session.set_status(phase2_status)
+            public_session.start_verb_rotation(spinning_emoji, initial_verb)
             ai_response = await asyncio.wait_for(
                 self._generate_ai_response(client, messages, public_session, model=model_name),
                 timeout=STREAM_TIMEOUT_SECONDS,
