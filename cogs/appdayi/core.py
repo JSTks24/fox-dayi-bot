@@ -14,7 +14,7 @@ from discord.ext import commands
 from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image, get_file_size_kb
 from paths import APP_TEMP_DIR, PROMPT_DIR, SAVE_DIR
 
-from .stream import DEFAULT_SYSTEM_PROMPT, MAX_IMAGE_ATTACHMENTS, PUBLIC_ALLOWED_MENTIONS, REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT, STATUS_PROCESSING_IMAGES, STATUS_RECEIVED, STATUS_REQUESTING_AI, STATUS_RESOLVING_CONTEXT, STREAM_TIMEOUT_SECONDS, PublicStreamReply
+from .stream import DEFAULT_SYSTEM_PROMPT, MAX_IMAGE_ATTACHMENTS, PUBLIC_ALLOWED_MENTIONS, REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT, STREAM_TIMEOUT_SECONDS, PublicStreamReply, pick_spinning_status
 
 class EmptyAIResponseError(RuntimeError):
     """AI 没有返回可用文本内容。"""
@@ -449,12 +449,13 @@ class AppDayiCoreMixin:
                 )
                 return
 
+            phase1_status, phase2_status = pick_spinning_status()
             public_session = PublicStreamReply(
                 source_message=message,
                 display_model_name=display_model_name,
                 requester_name=interaction.user.display_name,
             )
-            await public_session.start(STATUS_RECEIVED)
+            await public_session.start(phase1_status)
             await self._acknowledge_public_result(interaction, "⏳ 正在频道公开生成回复，请留意下方消息。")
 
             self.bot.current_parallel_dayi_tasks += 1
@@ -462,7 +463,7 @@ class AppDayiCoreMixin:
 
             os.makedirs(temp_dir, exist_ok=True)
 
-            await public_session.set_status(STATUS_RESOLVING_CONTEXT)
+            # Phase 1: phase1_status 已通过 start() 设置，期间整理上下文 & 处理图片
             history_pairs_newest_first = await self._collect_reply_chain_history(message)
             public_session.context_user_input_count = len(history_pairs_newest_first) + 1
             selected_image_counts = self._select_context_image_counts(message, history_pairs_newest_first)
@@ -475,7 +476,6 @@ class AppDayiCoreMixin:
             )
             if planned_image_count:
                 print(f"📸 [快速答疑] 计划附带上下文图片 {planned_image_count} 张（总上限 {MAX_IMAGE_ATTACHMENTS} 张）")
-                await public_session.set_status(STATUS_PROCESSING_IMAGES)
                 prepared_image_count = await self._prepare_turn_images(
                     conversation_turns,
                     temp_dir=temp_dir,
@@ -505,7 +505,7 @@ class AppDayiCoreMixin:
             if total_image_paths:
                 print(f"   - 图片总大小: {sum(get_file_size_kb(path) for path in total_image_paths):.2f} KB")
 
-            await public_session.set_status(STATUS_REQUESTING_AI)
+            await public_session.set_status(phase2_status)
             ai_response = await asyncio.wait_for(
                 self._generate_ai_response(client, messages, public_session, model=model_name),
                 timeout=STREAM_TIMEOUT_SECONDS,

@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import random
 import re
 import time
 import uuid
 from typing import Any
 import discord
+
+from paths import ROOT_DIR
 
 PUBLIC_ALLOWED_MENTIONS = discord.AllowedMentions.none()
 
@@ -35,13 +38,39 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT = "以下消息来自 Discord 同一条回复链历史，请结合上下文并重点回答最后一条用户消息。"
 
-STATUS_RECEIVED = "⏳ 收到请求，正在处理中，请稍候..."
+_SPINNING_EMOJIS_PATH = ROOT_DIR / "data" / "spinning" / "emojis.json"
+_SPINNING_VERBS_PATH = ROOT_DIR / "data" / "spinning" / "verbs.json"
 
-STATUS_RESOLVING_CONTEXT = "🧵 正在整理回复链上下文，请稍候..."
 
-STATUS_PROCESSING_IMAGES = "🖼️ 正在处理图片，请稍候..."
+def _load_json_array(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [str(item) for item in data]
+    except Exception:
+        pass
+    return []
 
-STATUS_REQUESTING_AI = "🤖 正在向 AI 请求回复，请稍候..."
+
+def pick_spinning_status():
+    # type: () -> tuple[str, str]
+    """从 spinning data 中随机选取 emoji 与 verb，返回两个阶段的状态文本。
+
+    Returns:
+        (phase1_status, phase2_status)
+        phase1: "{emoji} {verb}（正在整理上下文和图片...）"
+        phase2: "{emoji} {verb}（正在等待AI回复...）"
+    """
+    emojis = _load_json_array(_SPINNING_EMOJIS_PATH)
+    verbs = _load_json_array(_SPINNING_VERBS_PATH)
+
+    emoji = random.choice(emojis) if emojis else "⏳"
+    verb = random.choice(verbs) if verbs else "处理中"
+
+    phase1 = f"{emoji} {verb}（正在整理上下文和图片...）"
+    phase2 = f"{emoji} {verb}（正在等待AI回复...）"
+    return phase1, phase2
 
 QD_META_LINE_REGEX = re.compile(r"^\s*-# <\|qd-meta\|>(?P<payload>.+?)<\|/qd-meta\|>\s*$", re.MULTILINE)
 
