@@ -1,3 +1,4 @@
+import asyncio
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -84,11 +85,15 @@ class BroadcastPhase3Tests(unittest.TestCase):
 class BroadcastLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_cog_load_starts_auto_save_and_tasks(self):
         cog = object.__new__(broadcast.BroadcastCog)
+        loop = asyncio.get_event_loop()
+        cog.bot = SimpleNamespace(loop=loop)
+
         cog.auto_save = mock.Mock()
         cog.auto_save.is_running.return_value = False
         cog.start_all_tasks = mock.AsyncMock()
 
         await broadcast.BroadcastCog.cog_load(cog)
+        await asyncio.sleep(0)  # let the scheduled task run
 
         cog.auto_save.start.assert_called_once_with()
         cog.start_all_tasks.assert_awaited_once_with()

@@ -18,7 +18,7 @@ PUBLIC_MESSAGE_LIMIT = 1900
 
 STREAM_EDIT_INTERVAL_SECONDS = 3.0
 
-SPINNING_VERB_ROTATION_SECONDS = 5.0
+SPINNING_VERB_ROTATION_SECONDS = 8.0
 
 STREAM_POLL_INTERVAL_SECONDS = 0.5
 
@@ -67,11 +67,18 @@ def _get_spinning_emojis() -> list[str]:
     return emojis if emojis else ["⏳"]
 
 
-def pick_random_verb(*, exclude: str | None = None) -> str:
-    """随机选取一个 verb，尽量避免与 exclude 相同。"""
+def pick_random_verb(*, exclude: str | None = None, exclude_set: set[str] | None = None) -> str:
+    """随机选取一个 verb，尽量避免与已用过的 verb 重复。
+
+    exclude_set 优先于 exclude；当 exclude_set 覆盖了所有可用 verb 时，
+    清空已用列表并重新开始（保证始终能返回值）。
+    """
     verbs = _get_spinning_verbs()
-    if exclude and len(verbs) > 1:
-        candidates = [v for v in verbs if v != exclude]
+    used = exclude_set if exclude_set is not None else ({exclude} if exclude else set())
+    if used and len(verbs) > 1:
+        candidates = [v for v in verbs if v not in used]
+        if not candidates:
+            candidates = verbs
         return random.choice(candidates) if candidates else random.choice(verbs)
     return random.choice(verbs)
 
@@ -172,6 +179,7 @@ class PublicStreamReply:
         self._verb_rotation_task: asyncio.Task | None = None
         self._spinning_emoji: str | None = None
         self._current_verb: str | None = None
+        self._used_verbs: set[str] = set()
 
     @property
     def has_content(self) -> bool:
@@ -220,6 +228,7 @@ class PublicStreamReply:
         """
         self._spinning_emoji = emoji
         self._current_verb = initial_verb
+        self._used_verbs.add(initial_verb)
         if self._verb_rotation_task is None:
             self._verb_rotation_task = asyncio.create_task(self._verb_rotation_loop())
 
@@ -230,7 +239,7 @@ class PublicStreamReply:
             self._verb_rotation_task = None
 
     async def _verb_rotation_loop(self) -> None:
-        """后台循环：每 5 秒更换一次等待状态的 verb。"""
+        """后台循环：每 SPINNING_VERB_ROTATION_SECONDS 秒更换一次等待状态的 verb，同一次回答不重复。"""
         try:
             while not self._closed:
                 await asyncio.sleep(SPINNING_VERB_ROTATION_SECONDS)
@@ -239,7 +248,8 @@ class PublicStreamReply:
                 if self.has_content or self._closed:
                     break
 
-                new_verb = pick_random_verb(exclude=self._current_verb)
+                new_verb = pick_random_verb(exclude_set=self._used_verbs)
+                self._used_verbs.add(new_verb)
                 self._current_verb = new_verb
                 new_status = f"{self._spinning_emoji} {new_verb}（正在等待AI回复...）"
 

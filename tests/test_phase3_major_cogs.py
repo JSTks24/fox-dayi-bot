@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+from unittest import mock
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,7 @@ class DummyTree:
     def __init__(self):
         self.removed = []
 
-    def remove_command(self, name, *, type):
+    def remove_command(self, name, *, guild=None, type):
         self.removed.append((name, type))
 
 
@@ -178,7 +179,8 @@ class QuickPunishTests(unittest.TestCase):
         cog = object.__new__(quick_punish.QuickPunishCog)
         cog.bot = DummyBot()
 
-        cog.cog_unload()
+        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111"}, clear=False):
+            cog.cog_unload()
 
         self.assertEqual(
             cog.bot.tree.removed,
@@ -301,7 +303,8 @@ class Fox14TaggerTests(unittest.TestCase):
         cog.bot = DummyBot()
         cog._expiry_task = task
 
-        cog.cog_unload()
+        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111"}, clear=False):
+            cog.cog_unload()
 
         self.assertTrue(task.cancelled)
         self.assertEqual(cog.bot.tree.removed, [(fox14_tagger.fox14_tag_context.name, fox14_tagger.fox14_tag_context.type)])
