@@ -96,8 +96,8 @@ def pick_spinning_status() -> tuple[str, str, str, str]:
     emoji = random.choice(_get_spinning_emojis())
     verb = pick_random_verb()
 
-    phase1 = f"{emoji} {verb}（正在整理上下文和图片...）"
-    phase2 = f"{emoji} {verb}（正在等待AI回复...）"
+    phase1 = f"{emoji} {verb}（整理上下文...）"
+    phase2 = f"{emoji} {verb}（等待AI回复...）"
     return phase1, phase2, emoji, verb
 
 QD_META_LINE_REGEX = re.compile(r"^\s*-# <\|qd-meta\|>(?P<payload>.+?)<\|/qd-meta\|>\s*$", re.MULTILINE)
