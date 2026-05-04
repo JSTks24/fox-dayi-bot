@@ -240,7 +240,7 @@ class QuickPunishCoreMixin:
             return [], False
         
         try:
-            await member.remove_roles(*roles_to_remove_objs, reason="快速处罚")
+            await member.remove_roles(*roles_to_remove_objs, reason="答题处罚")
             return removed_roles, True
         except Exception as e:
             print(f"移除身份组时出错: {e}")

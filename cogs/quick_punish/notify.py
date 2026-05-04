@@ -116,7 +116,7 @@ class QuickPunishNotifyMixin:
                             original_message: discord.Message = None):
         """发送日志Embed到指定频道，并转发原消息"""
         embed = discord.Embed(
-            title="⚠️ 快速处罚执行",
+            title="⚠️ 答题处罚执行",
             color=discord.Color.red(),
             timestamp=datetime.now()
         )
@@ -338,12 +338,12 @@ class QuickPunishNotifyMixin:
                                         reason: str, removed_roles: list[int]):
         """在原频道发送处罚通知"""
         embed = discord.Embed(
-            title="⚠️ 快速处罚",
+            title="⚠️ 答题处罚",
             color=discord.Color.orange(),
             timestamp=datetime.now()
         )
         
-        embed.add_field(name="处罚对象", value=f"{user.mention}", inline=True)
+        embed.add_field(name="对象", value=f"{user.mention}", inline=True)
         embed.add_field(name="执行者", value=f"{executor.mention}", inline=True)
         embed.add_field(name="原因", value=reason, inline=False)
         
