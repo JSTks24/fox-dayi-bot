@@ -40,8 +40,14 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT = "以下消息来自 Discord 同一条回复链历史，请结合上下文并重点回答最后一条用户消息。"
 
-_SPINNING_EMOJIS_PATH = ROOT_DIR / "data" / "spinning" / "emojis.json"
-_SPINNING_VERBS_PATH = ROOT_DIR / "data" / "spinning" / "verbs.json"
+_SPINNING_DIR = ROOT_DIR / "data" / "spinning"
+_SPINNING_EMOJIS_PATH = _SPINNING_DIR / "emojis.json"
+_SPINNING_LEGACY_VERBS_PATH = _SPINNING_DIR / "verbs.json"
+_SPINNING_VERB_TIERS = (
+    (_SPINNING_DIR / "not_fun_verbs.json", 65),
+    (_SPINNING_DIR / "fun_verbs.json", 30),
+    (_SPINNING_DIR / "very_fun_verbs.json", 5),
+)
 
 
 def _load_json_array(path):
@@ -55,10 +61,26 @@ def _load_json_array(path):
     return []
 
 
+def _get_spinning_verb_tiers() -> list[tuple[list[str], int]]:
+    """返回按出现概率分档的 spinning verbs。"""
+    tiers: list[tuple[list[str], int]] = []
+    for path, weight in _SPINNING_VERB_TIERS:
+        verbs = _load_json_array(path)
+        if verbs:
+            tiers.append((verbs, weight))
+    return tiers
+
+
 def _get_spinning_verbs() -> list[str]:
     """返回所有可用的 spinning verbs 列表。"""
-    verbs = _load_json_array(_SPINNING_VERBS_PATH)
-    return verbs if verbs else ["处理中"]
+    verbs: list[str] = []
+    for tier_verbs, _weight in _get_spinning_verb_tiers():
+        verbs.extend(tier_verbs)
+    if verbs:
+        return verbs
+
+    legacy_verbs = _load_json_array(_SPINNING_LEGACY_VERBS_PATH)
+    return legacy_verbs if legacy_verbs else ["处理中"]
 
 
 def _get_spinning_emojis() -> list[str]:
@@ -68,18 +90,32 @@ def _get_spinning_emojis() -> list[str]:
 
 
 def pick_random_verb(*, exclude: str | None = None, exclude_set: set[str] | None = None) -> str:
-    """随机选取一个 verb，尽量避免与已用过的 verb 重复。
+    """按档位概率随机选取一个 verb，尽量避免与已用过的 verb 重复。
 
-    exclude_set 优先于 exclude；当 exclude_set 覆盖了所有可用 verb 时，
-    清空已用列表并重新开始（保证始终能返回值）。
+    档位出现概率由 data/spinning 下的 JSON 文件决定：
+    not_fun_verbs.json 65%，fun_verbs.json 30%，very_fun_verbs.json 5%。
+    exclude_set 优先于 exclude；当 exclude_set 覆盖了所有可用 verb 时，允许重新选取已用 verb，
+    保证始终能返回值。
     """
-    verbs = _get_spinning_verbs()
     used = exclude_set if exclude_set is not None else ({exclude} if exclude else set())
+    tiers = _get_spinning_verb_tiers()
+    if tiers:
+        candidate_tiers = []
+        for tier_verbs, weight in tiers:
+            candidates = [verb for verb in tier_verbs if verb not in used] if used else tier_verbs
+            if candidates:
+                candidate_tiers.append((candidates, weight))
+
+        if candidate_tiers:
+            tier_candidates = [candidates for candidates, _weight in candidate_tiers]
+            tier_weights = [weight for _candidates, weight in candidate_tiers]
+            return random.choice(random.choices(tier_candidates, weights=tier_weights, k=1)[0])
+
+    verbs = _get_spinning_verbs()
     if used and len(verbs) > 1:
-        candidates = [v for v in verbs if v not in used]
-        if not candidates:
-            candidates = verbs
-        return random.choice(candidates) if candidates else random.choice(verbs)
+        candidates = [verb for verb in verbs if verb not in used]
+        if candidates:
+            return random.choice(candidates)
     return random.choice(verbs)
 
 
@@ -88,8 +124,8 @@ def pick_spinning_status() -> tuple[str, str, str, str]:
 
     Returns:
         (phase1_status, phase2_status, emoji, verb)
-        phase1: "{emoji} {verb}（正在整理上下文和图片...）"
-        phase2: "{emoji} {verb}（正在等待AI回复...）"
+        phase1: "{emoji} {verb}（整理上下文...）"
+        phase2: "{emoji} {verb}（等待AI回复...）"
         emoji: 选中的 emoji（供后续轮换 verb 时复用）
         verb: 选中的 verb（供后续轮换时作为初始值）
     """
