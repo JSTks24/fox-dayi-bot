@@ -258,7 +258,7 @@ class QuickPunishConfirmView(discord.ui.View):
             except Exception:
                 pass
 
-    @discord.ui.button(label="确认执行", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="OK你已经死亡", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         # 黄金法则：先defer
         await safe_defer(interaction)
