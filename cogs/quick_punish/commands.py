@@ -109,7 +109,7 @@ class QuickPunishModal(discord.ui.Modal):
         # 原因输入框（最多100字符）
         self.reason = discord.ui.TextInput(
             label="处罚原因",
-            placeholder="请输入处罚原因（留空则使用默认值'付费违规第三方'）",
+            placeholder="请输入处罚原因（留空则使用默认值'违规第三方'）",
             required=False,
             max_length=100,
             style=discord.TextStyle.short
@@ -124,7 +124,7 @@ class QuickPunishModal(discord.ui.Modal):
         await safe_defer(interaction)
 
         # 获取处罚原因
-        reason = self.reason.value.strip() or "付费违规第三方"
+        reason = self.reason.value.strip() or "违规第三方"
 
         # 构建二次确认Embed（包含用户信息、原因、模板文件名占位）
         user = self.target_user
@@ -178,14 +178,14 @@ class RemoteQuickPunishModal(discord.ui.Modal):
         self.cog = cog
 
         self.reason = discord.ui.TextInput(
-            placeholder="请输入处罚原因（留空则使用默认值'付费违规第三方'）",
+            placeholder="请输入处罚原因（留空则使用默认值'违规第三方'）",
             required=False,
             max_length=100,
             style=discord.TextStyle.short
         )
         self.add_item(discord.ui.Label(
             text="处罚原因",
-            description="留空则使用默认值“付费违规第三方”",
+            description="留空则使用默认值“违规第三方”",
             component=self.reason
         ))
 
@@ -204,7 +204,7 @@ class RemoteQuickPunishModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         await safe_defer(interaction)
 
-        reason = self.reason.value.strip() or "付费违规第三方"
+        reason = self.reason.value.strip() or "违规第三方"
         selected_values = getattr(self.template_select, "values", []) or []
         chosen_template = selected_values[0] if selected_values and selected_values[0] != "__none__" else "default.txt"
 
@@ -381,7 +381,7 @@ class TemplateSelect(discord.ui.Select):
         embed.add_field(name="显示名称", value=user.display_name, inline=True)
         embed.add_field(name="用户名", value=user.name, inline=True)
         embed.add_field(name="ID", value=str(user.id), inline=False)
-        embed.add_field(name="处罚原因", value=view.reason or "付费违规第三方", inline=False)
+        embed.add_field(name="处罚原因", value=view.reason or "违规第三方", inline=False)
         embed.add_field(name="私信模板", value=view.selected_template_filename or "默认（第三方API）", inline=False)
 
         await interaction.edit_original_response(embed=embed, view=view)

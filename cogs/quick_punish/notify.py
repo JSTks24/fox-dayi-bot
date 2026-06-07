@@ -308,9 +308,10 @@ class QuickPunishNotifyMixin:
             reverify_line = f"\n请仔细阅读以上内容和社区规则，重新完成新人验证答题： {self.reverify_link}"
 
         dm_parts = [
-            "# === 答题处罚通知 ===\n",
-            f"你在以下服务器的一些身份组已被移除：{server_role_text}。原因：{reason}\n",
-            f"此处罚在{confirm_time}由{executor.name}确认。\n",
+            "# === 重新答题通知 ===\n",
+            f"你好，\n",
+            f"由于 {reason}，你在以下服务器的一些身份组已被移除：{server_role_text}。\n",
+            f"此操作在{confirm_time}由{executor.name}确认。\n",
             third_content.strip(),
             reverify_line,
         ]
@@ -322,12 +323,12 @@ class QuickPunishNotifyMixin:
 
             dm_parts.append(
                 "\n## ⚠️ 请勿回复此消息，机器人不会读取或转发私信。\n\n"
-                f"在**重新阅读上方内容和{rules_text}之后**，如果你认为此处罚存在**事实性错误**"
-                "（例如：处罚对象搞错了、你使用的API/云酒馆被误认为违规第三方提供等），"
-                f"请前往 <#{self.appeal_channel_id}> 向管理组申诉。\n\n"
+                f"在**重新阅读上方内容和{rules_text}之后**，如果你认为本次处罚存在事实性错误"
+                "（例如：处罚对象搞错了、使用的API/云酒馆被误认为违规第三方提供等），"
+                f"请使用 `📪|意见与投诉投稿` 频道申诉。\n\n"
                 "⛔ **以下无效申诉将不予回复：**\n"
-                " - 不读完上方说明就开ticket，只反问「我做了什么」，「凭什么罚我」的\n"
-                "- 申诉内容为「不理解相关规则」或「不知道相关规则」，主张无知者无罪的\n"
+                " - 不读完上方说明和社区rule就开ticket，只反问「我做了什么」，「凭什么罚我」的\n"
+                "- 以「不理解相关规则」或「不知道相关规则」为理由，主张无知者无罪的\n"
                 "- 觉得规则不合理，想来找管理辩论，更改规则的\n"
             )
         
