@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -78,6 +79,28 @@ class AppDayiPhase3Tests(unittest.TestCase):
         self.assertIs(captured["func"], write_mock)
         self.assertEqual(captured["args"][0], 7)
         write_mock.assert_called_once_with(7, turns, "system prompt")
+
+    def test_cleanup_prompt_archives_keeps_newest_five_txt_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            old_txt_paths = []
+            for index in range(7):
+                path = os.path.join(temp_dir, f"archive_{index}.txt")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(str(index))
+                os.utime(path, (index, index))
+                old_txt_paths.append(path)
+
+            keep_file = os.path.join(temp_dir, "notes.json")
+            Path(keep_file).write_text("{}", encoding="utf-8")
+
+            deleted_paths = self.cog._cleanup_prompt_archives(temp_dir)
+
+            self.assertEqual({os.path.basename(path) for path in deleted_paths}, {"archive_0.txt", "archive_1.txt"})
+            self.assertEqual(
+                sorted(path.name for path in Path(temp_dir).glob("*.txt")),
+                [f"archive_{index}.txt" for index in range(2, 7)],
+            )
+            self.assertTrue(os.path.exists(keep_file))
 
 
 class SummaryPhase3Tests(unittest.TestCase):

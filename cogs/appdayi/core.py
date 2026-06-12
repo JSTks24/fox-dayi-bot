@@ -16,6 +16,9 @@ from paths import APP_TEMP_DIR, PROMPT_DIR, SAVE_DIR
 
 from .stream import DEFAULT_SYSTEM_PROMPT, MAX_IMAGE_ATTACHMENTS, PUBLIC_ALLOWED_MENTIONS, REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT, STREAM_TIMEOUT_SECONDS, PublicStreamReply, pick_spinning_status
 
+APPDAYI_ARCHIVE_LOG_KEEP_COUNT = 5
+
+
 class EmptyAIResponseError(RuntimeError):
     """AI 没有返回可用文本内容。"""
 
@@ -234,6 +237,42 @@ class AppDayiCoreMixin:
 
         return "".join(sections)
 
+    def _cleanup_prompt_archives(self, save_dir: str, keep_count: int = APPDAYI_ARCHIVE_LOG_KEEP_COUNT) -> list[str]:
+        keep_count = max(0, keep_count)
+        try:
+            candidates: list[tuple[int, str, str]] = []
+            with os.scandir(save_dir) as entries:
+                for entry in entries:
+                    try:
+                        if not entry.is_file() or not entry.name.lower().endswith(".txt"):
+                            continue
+                        candidates.append((entry.stat().st_mtime_ns, entry.name, entry.path))
+                    except OSError as e:
+                        print(f"⚠️ [快速答疑] 读取日志文件信息失败: {entry.path} -> {e}")
+        except FileNotFoundError:
+            return []
+        except OSError as e:
+            print(f"⚠️ [快速答疑] 扫描日志存档目录失败: {save_dir} -> {e}")
+            return []
+
+        if len(candidates) <= keep_count:
+            return []
+
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        deleted_paths: list[str] = []
+        for _, _, path in candidates[keep_count:]:
+            try:
+                os.remove(path)
+                deleted_paths.append(path)
+            except FileNotFoundError:
+                continue
+            except OSError as e:
+                print(f"⚠️ [快速答疑] 删除旧日志存档失败: {path} -> {e}")
+
+        if deleted_paths:
+            print(f"🧹 [快速答疑] 已清理旧日志存档 {len(deleted_paths)} 个，仅保留最近 {keep_count} 个 txt")
+        return deleted_paths
+
     def _write_prompt_archive(self, user_id: int, turns: list[dict[str, Any]], system_prompt: str) -> str:
         try:
             save_dir = os.fspath(SAVE_DIR)
@@ -245,6 +284,7 @@ class AppDayiCoreMixin:
             archive_content = self._build_archive_prompt_content(turns, system_prompt)
             with open(save_path, "w", encoding="utf-8") as f:
                 f.write(archive_content)
+            self._cleanup_prompt_archives(save_dir)
             return save_path
         except Exception as e:
             print(f"❌ 存档提示词失败: {e}")
