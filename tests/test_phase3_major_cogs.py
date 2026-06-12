@@ -173,7 +173,7 @@ class QuickPunishTests(unittest.TestCase):
         self.assertIn("https://example.com/reverify", content)
         self.assertIn("[社区规则](https://example.com/rules)", content)
         self.assertIn("<#42>", content)
-        self.assertNotIn("1338036166221365339", content)
+        self.assertNotIn("999999999999999999", content)
 
     def test_cog_unload_removes_context_menus(self):
         cog = object.__new__(quick_punish.QuickPunishCog)
