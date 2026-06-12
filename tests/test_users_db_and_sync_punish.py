@@ -62,6 +62,56 @@ class PermissionCogTests(unittest.TestCase):
             finally:
                 permission.USERS_DB_PATH = original_path
 
+    def test_owner_can_remove_other_admins(self):
+        bot = DummyBot()
+        bot.owner_ids = [1]
+        cog = permission.PermissionCog(bot)
+
+        with temporary_workdir() as temp_dir:
+            original_path = permission.USERS_DB_PATH
+            permission.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
+            db_path = Path(permission.USERS_DB_PATH)
+            try:
+                create_users_db(db_path, admins=(2,))
+
+                success, already_exists, not_exists = cog._apply_permission_changes_sync(
+                    group="admins",
+                    action="remove",
+                    target_user_ids=[2],
+                    operator_id=1,
+                    operator_name="owner",
+                )
+
+                with sqlite3.connect(db_path) as conn:
+                    admin_ids = list(conn.execute("SELECT id FROM admins"))
+            finally:
+                permission.USERS_DB_PATH = original_path
+
+        self.assertEqual((success, already_exists, not_exists), (["2"], [], []))
+        self.assertEqual(admin_ids, [])
+
+    def test_owner_admin_entry_cannot_be_removed(self):
+        bot = DummyBot()
+        bot.owner_ids = [1]
+        cog = permission.PermissionCog(bot)
+
+        with temporary_workdir() as temp_dir:
+            original_path = permission.USERS_DB_PATH
+            permission.USERS_DB_PATH = str(Path(temp_dir) / "data" / "db" / "users.db")
+            try:
+                create_users_db(Path(permission.USERS_DB_PATH), admins=(1, 2))
+
+                with self.assertRaises(PermissionError):
+                    cog._apply_permission_changes_sync(
+                        group="admins",
+                        action="remove",
+                        target_user_ids=[1],
+                        operator_id=1,
+                        operator_name="owner",
+                    )
+            finally:
+                permission.USERS_DB_PATH = original_path
+
 
 class SyncPunishDataTests(unittest.TestCase):
     def test_sync_interface_record_inserts_and_deduplicates(self):

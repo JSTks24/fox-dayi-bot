@@ -21,19 +21,29 @@ T = TypeVar("T")
 
 def check_admin(interaction: discord.Interaction) -> bool:
     """检查用户是否为机器人管理员。"""
+    owner_ids = getattr(interaction.client, "owner_ids", [])
+    if interaction.user.id in owner_ids:
+        return True
+
     admins = getattr(interaction.client, "admins", [])
     return interaction.user.id in admins
 
 
 def check_admin_or_trusted(interaction: discord.Interaction) -> bool:
     """检查用户是否为管理员或受信任用户。"""
-    admins = getattr(interaction.client, "admins", [])
+    if check_admin(interaction):
+        return True
+
     trusted_users = getattr(interaction.client, "trusted_users", [])
-    return interaction.user.id in admins or interaction.user.id in trusted_users
+    return interaction.user.id in trusted_users
 
 
 def get_user_tier(client: object, user_id: int) -> str:
     """Return the user's bot-level tier based on in-memory permission lists."""
+    owner_ids = getattr(client, "owner_ids", [])
+    if user_id in owner_ids:
+        return "admin"
+
     admins = getattr(client, "admins", [])
     if user_id in admins:
         return "admin"

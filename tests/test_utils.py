@@ -22,8 +22,9 @@ class DummyUser:
 
 
 class DummyClient:
-    def __init__(self, admins=None, trusted_users=None):
+    def __init__(self, admins=None, owner_ids=None, trusted_users=None):
         self.admins = admins or []
+        self.owner_ids = owner_ids or []
         self.trusted_users = trusted_users or []
 
 
@@ -41,9 +42,21 @@ class DummyResponse:
 
 
 class DummyInteraction:
-    def __init__(self, *, user_id: int = 1, admins=None, trusted_users=None, command_name: str = "dummy"):
+    def __init__(
+        self,
+        *,
+        user_id: int = 1,
+        admins=None,
+        owner_ids=None,
+        trusted_users=None,
+        command_name: str = "dummy",
+    ):
         self.user = DummyUser(user_id=user_id)
-        self.client = DummyClient(admins=admins, trusted_users=trusted_users)
+        self.client = DummyClient(
+            admins=admins,
+            owner_ids=owner_ids,
+            trusted_users=trusted_users,
+        )
         self.response = DummyResponse()
         self.command = DummyCommand(command_name)
 
@@ -52,15 +65,18 @@ class UtilsTests(unittest.TestCase):
     def test_check_admin(self):
         interaction = DummyInteraction(user_id=42, admins=[42])
         self.assertTrue(utils.check_admin(interaction))
+        self.assertTrue(utils.check_admin(DummyInteraction(user_id=99, owner_ids=[99])))
         self.assertFalse(utils.check_admin(DummyInteraction(user_id=7, admins=[42])))
 
     def test_check_admin_or_trusted(self):
         self.assertTrue(utils.check_admin_or_trusted(DummyInteraction(user_id=1, admins=[1])))
+        self.assertTrue(utils.check_admin_or_trusted(DummyInteraction(user_id=9, owner_ids=[9])))
         self.assertTrue(utils.check_admin_or_trusted(DummyInteraction(user_id=2, trusted_users=[2])))
         self.assertFalse(utils.check_admin_or_trusted(DummyInteraction(user_id=3)))
 
     def test_get_user_tier(self):
         self.assertEqual(utils.get_user_tier(DummyClient(admins=[1]), 1), "admin")
+        self.assertEqual(utils.get_user_tier(DummyClient(owner_ids=[9]), 9), "admin")
         self.assertEqual(utils.get_user_tier(DummyClient(trusted_users=[2]), 2), "trusted")
         self.assertEqual(utils.get_user_tier(DummyClient(), 3), "other")
 

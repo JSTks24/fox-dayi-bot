@@ -113,6 +113,44 @@ SKIPPED_COG_DIRECTORIES = {"deprecated"}
 USERS_DB_PATH = str(USERS_DB)
 
 
+def parse_owner_ids(raw: str) -> tuple[list[int], list[str]]:
+    owner_ids: list[int] = []
+    invalid_items: list[str] = []
+    seen: set[int] = set()
+
+    for part in raw.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        try:
+            owner_id = int(token)
+        except ValueError:
+            invalid_items.append(token)
+            continue
+        if owner_id in seen:
+            continue
+        seen.add(owner_id)
+        owner_ids.append(owner_id)
+
+    return owner_ids, invalid_items
+
+
+OWNER_IDS, INVALID_OWNER_ID_ITEMS = parse_owner_ids(os.getenv("OWNER_IDS", ""))
+bot.owner_ids = OWNER_IDS
+bot.admins = list(OWNER_IDS)
+
+
+def merge_owner_admins(admins: list[int]) -> list[int]:
+    merged: list[int] = []
+    seen: set[int] = set()
+    for user_id in [*bot.owner_ids, *admins]:
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        merged.append(user_id)
+    return merged
+
+
 def is_admin(interaction: discord.Interaction) -> bool:
     """检查用户是否为管理员。"""
     return interaction.user.id in getattr(bot, "admins", [])
@@ -140,7 +178,7 @@ async def load_database(*, raise_on_error: bool = False) -> None:
             raise RuntimeError(f"SQLite 数据库错误: {exc}") from exc
 
         print(f"[错误] SQLite 数据库错误: {exc}。将使用空数据库。")
-        bot.admins = []
+        bot.admins = list(bot.owner_ids)
         bot.trusted_users = []
         return
     except Exception as exc:
@@ -148,11 +186,11 @@ async def load_database(*, raise_on_error: bool = False) -> None:
             raise RuntimeError(f"加载数据库时发生未知错误: {exc}") from exc
 
         print(f"[错误] 加载数据库时发生未知错误: {exc}。将使用空数据库。")
-        bot.admins = []
+        bot.admins = list(bot.owner_ids)
         bot.trusted_users = []
         return
 
-    bot.admins = admins
+    bot.admins = merge_owner_admins(admins)
     bot.trusted_users = trusted_users
 
 
@@ -172,6 +210,9 @@ async def on_ready():
     """机器人启动时触发。"""
     print(f"✅ 机器人已登录: {bot.user}")
     print(f"📊 连接到 {len(bot.guilds)} 个服务器")
+    if INVALID_OWNER_ID_ITEMS:
+        print(f"⚠️ OWNER_IDS 中存在无效项: {', '.join(INVALID_OWNER_ID_ITEMS[:10])}")
+    print(f"🔐 最高权限用户ID: {bot.owner_ids}")
     print(f"👑 管理员ID: {bot.admins}")
     print(f"🤝 受信任用户ID: {bot.trusted_users}")
 

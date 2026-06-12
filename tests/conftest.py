@@ -14,6 +14,7 @@ class DummyBot:
     def __init__(self):
         self.user = None
         self.admins = []
+        self.owner_ids = []
         self.trusted_users = []
 
 

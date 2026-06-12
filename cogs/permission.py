@@ -36,20 +36,32 @@ class PermissionCog(commands.Cog):
             cursor = conn.cursor()
 
             if action == "remove" and group == "admins":
+                owner_ids = set(getattr(self.bot, "owner_ids", []))
+                target_owner_ids = [uid for uid in target_user_ids if uid in owner_ids]
+                if target_owner_ids:
+                    owner_list = "`, `".join(str(uid) for uid in target_owner_ids)
+                    raise PermissionError(f"❌ 不能删除开发者：`{owner_list}`")
+
                 cursor.execute("SELECT id FROM admins")
                 all_admins = [int(row[0]) for row in cursor.fetchall()]
                 target_admins = [
                     uid for uid in target_user_ids if uid in all_admins and uid != operator_id
                 ]
-                if target_admins:
+                if target_admins and operator_id not in owner_ids:
                     if len(target_admins) == 1:
                         raise PermissionError(
-                            f"❌ 您不能删除其他管理员的权限。用户 `{target_admins[0]}` 是管理员。"
+                            f"❌ 只有开发者可以删除其他管理员的权限。用户 `{target_admins[0]}` 是管理员。"
                         )
                     admin_list = "`, `".join(str(uid) for uid in target_admins)
                     raise PermissionError(
-                        f"❌ 您不能删除其他管理员的权限。以下用户是管理员：`{admin_list}`"
+                        f"❌ 只有开发者可以删除其他管理员的权限。以下用户是管理员：`{admin_list}`"
                     )
+
+                remaining_admins = [
+                    uid for uid in all_admins if uid not in set(target_user_ids)
+                ]
+                if not remaining_admins and not owner_ids:
+                    raise PermissionError("❌ 不能删除最后一个管理员权限。")
 
             success_users: list[str] = []
             already_exists_users: list[str] = []
