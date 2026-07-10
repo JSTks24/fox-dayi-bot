@@ -8,7 +8,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.utils import CooldownManager, get_user_tier, log_slash_command, safe_defer as _safe_defer
+from cogs.shared.cache import CooldownManager
+from cogs.shared.command_log import log_slash_command
+from cogs.shared.interactions import safe_defer as _safe_defer
+from cogs.shared.permissions import get_user_tier
 
 DEFAULT_BASE_URL = "https://naoleiwiki.pages.dev"
 DEFAULT_LIMIT = 5

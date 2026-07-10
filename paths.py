@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # drift:ignore[AVS] reason:Canonical filesystem map is intentionally stable and shared.
 
 from pathlib import Path
 

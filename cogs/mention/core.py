@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timedelta
 import logging
 import traceback
-from cogs.utils import CooldownManager, TTLCache
+from cogs.shared.cache import CooldownManager, TTLCache
 from paths import (
     MENTION_KB_DIR,
     MENTION_SETTINGS_FILE,

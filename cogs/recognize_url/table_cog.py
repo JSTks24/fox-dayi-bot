@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.utils import safe_defer
+from cogs.shared.interactions import safe_defer
 from paths import (
     API_TABLE_BAD_FILE,
     API_TABLE_GOOD_FILE,

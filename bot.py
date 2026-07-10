@@ -1,4 +1,4 @@
-import asyncio
+import asyncio  # drift:ignore[CCC] until:2026-10-15 reason:Historical counterpart cogs/utils.py was removed after focused helper extraction.
 import io
 import os
 import sqlite3
@@ -13,7 +13,8 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from cogs.utils import get_bot_should_guild_objects, log_slash_command
+from cogs.shared.command_log import log_slash_command
+from cogs.shared.context_menus import get_bot_should_guild_objects
 from paths import USERS_DB
 
 load_dotenv()

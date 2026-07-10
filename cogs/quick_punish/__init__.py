@@ -4,7 +4,7 @@ from __future__ import annotations
 from discord.ext import commands as discord_commands
 from dotenv import load_dotenv
 
-from cogs.utils import register_guild_scoped_context_menus
+from cogs.shared.context_menus import register_guild_scoped_context_menus
 from .commands import QuickPunishCommandsMixin, quick_punish_context, remote_quick_punish_context
 from .core import QuickPunishCoreMixin
 from .db import QuickPunishDBMixin

@@ -3,7 +3,7 @@
 ## Source Map
 
 - `bot.py` initializes the Discord client, shared state, error handling, and automatic cog loading.
-- `cogs/` contains features. Small features are modules such as `summary.py` and `role_sync.py`; larger features use packages such as `appdayi/`, `mention/`, `pending_reviewer/`, `quick_punish/`, `broadcast/`, `tagger/`, and `recognize_url/`. Keep extension setup in `setup()` and shared helpers in focused submodules or `cogs/utils.py`.
+- `cogs/` contains features. Small features are modules such as `summary.py` and `role_sync.py`; larger features use packages such as `appdayi/`, `mention/`, `pending_reviewer/`, `quick_punish/`, `broadcast/`, `tagger/`, and `recognize_url/`. Keep extension setup in `setup()` and cross-feature helpers in focused modules under `cogs/shared/`.
 - `paths.py` is the canonical filesystem map. `data/` holds durable databases, prompts, and configuration; `runtime/` holds rebuildable logs, temporary files, archives, and RAG data. Do not hard-code alternate paths.
 - `tests/` mirrors feature behavior. Put shared fakes and temporary-workspace helpers in `tests/conftest.py`; name files `tests/test_<area>.py`. `.env.example` and `mention/*_example.json` are configuration examples.
 

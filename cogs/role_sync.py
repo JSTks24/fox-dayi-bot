@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # drift:ignore[CCC] until:2026-10-15 reason:Co-change samples are repository-wide phase migrations, not runtime dependencies.
 
 import asyncio
 import json
@@ -13,7 +13,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.utils import check_admin, log_slash_command
+from cogs.shared.command_log import log_slash_command
+from cogs.shared.permissions import check_admin
 from paths import ROLE_SYNC_CONFIG_FILE, USERS_DB
 
 ROLE_SYNC_CONFIG_PATH = str(ROLE_SYNC_CONFIG_FILE)

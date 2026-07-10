@@ -2,7 +2,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from typing import Literal
-from cogs.utils import check_admin, log_slash_command, safe_defer as _safe_defer
+from cogs.shared.command_log import log_slash_command
+from cogs.shared.interactions import safe_defer as _safe_defer
+from cogs.shared.permissions import check_admin
 
 
 class DebugRole(commands.Cog):

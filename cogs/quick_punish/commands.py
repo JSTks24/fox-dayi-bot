@@ -6,7 +6,7 @@ from datetime import datetime
 import re
 from typing import Any
 import io
-from cogs.utils import safe_defer
+from cogs.shared.interactions import safe_defer
 
 
 _QUICK_PUNISH_MESSAGE_LINK_RE = re.compile(

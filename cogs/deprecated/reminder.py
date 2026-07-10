@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.utils import log_slash_command
+from cogs.shared.command_log import log_slash_command
 
 BJ_TZ = timezone(timedelta(hours=8))
 

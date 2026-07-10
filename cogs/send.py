@@ -2,7 +2,9 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import re
-from cogs.utils import check_admin, log_slash_command, safe_defer as _safe_defer
+from cogs.shared.command_log import log_slash_command
+from cogs.shared.interactions import safe_defer as _safe_defer
+from cogs.shared.permissions import check_admin
 
 class SendCog(commands.Cog):
     def __init__(self, bot: commands.Bot):

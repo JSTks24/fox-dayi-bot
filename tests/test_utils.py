@@ -7,7 +7,7 @@ from unittest import mock
 
 from PIL import Image
 
-from cogs import utils
+from cogs.shared import cache, command_log, images, interactions, permissions
 
 
 class DummyCommand:
@@ -64,35 +64,35 @@ class DummyInteraction:
 class UtilsTests(unittest.TestCase):
     def test_check_admin(self):
         interaction = DummyInteraction(user_id=42, admins=[42])
-        self.assertTrue(utils.check_admin(interaction))
-        self.assertTrue(utils.check_admin(DummyInteraction(user_id=99, owner_ids=[99])))
-        self.assertFalse(utils.check_admin(DummyInteraction(user_id=7, admins=[42])))
+        self.assertTrue(permissions.check_admin(interaction))
+        self.assertTrue(permissions.check_admin(DummyInteraction(user_id=99, owner_ids=[99])))
+        self.assertFalse(permissions.check_admin(DummyInteraction(user_id=7, admins=[42])))
 
     def test_check_admin_or_trusted(self):
-        self.assertTrue(utils.check_admin_or_trusted(DummyInteraction(user_id=1, admins=[1])))
-        self.assertTrue(utils.check_admin_or_trusted(DummyInteraction(user_id=9, owner_ids=[9])))
-        self.assertTrue(utils.check_admin_or_trusted(DummyInteraction(user_id=2, trusted_users=[2])))
-        self.assertFalse(utils.check_admin_or_trusted(DummyInteraction(user_id=3)))
+        self.assertTrue(permissions.check_admin_or_trusted(DummyInteraction(user_id=1, admins=[1])))
+        self.assertTrue(permissions.check_admin_or_trusted(DummyInteraction(user_id=9, owner_ids=[9])))
+        self.assertTrue(permissions.check_admin_or_trusted(DummyInteraction(user_id=2, trusted_users=[2])))
+        self.assertFalse(permissions.check_admin_or_trusted(DummyInteraction(user_id=3)))
 
     def test_get_user_tier(self):
-        self.assertEqual(utils.get_user_tier(DummyClient(admins=[1]), 1), "admin")
-        self.assertEqual(utils.get_user_tier(DummyClient(owner_ids=[9]), 9), "admin")
-        self.assertEqual(utils.get_user_tier(DummyClient(trusted_users=[2]), 2), "trusted")
-        self.assertEqual(utils.get_user_tier(DummyClient(), 3), "other")
+        self.assertEqual(permissions.get_user_tier(DummyClient(admins=[1]), 1), "admin")
+        self.assertEqual(permissions.get_user_tier(DummyClient(owner_ids=[9]), 9), "admin")
+        self.assertEqual(permissions.get_user_tier(DummyClient(trusted_users=[2]), 2), "trusted")
+        self.assertEqual(permissions.get_user_tier(DummyClient(), 3), "other")
 
     def test_safe_defer_is_idempotent(self):
         interaction = DummyInteraction()
 
-        asyncio.run(utils.safe_defer(interaction))
-        asyncio.run(utils.safe_defer(interaction))
+        asyncio.run(interactions.safe_defer(interaction))
+        asyncio.run(interactions.safe_defer(interaction))
 
         self.assertEqual(interaction.response.defer_calls, [True])
 
     def test_safe_defer_respects_ephemeral_flag_and_done_state(self):
         interaction = DummyInteraction()
 
-        asyncio.run(utils.safe_defer(interaction, ephemeral=False))
-        asyncio.run(utils.safe_defer(interaction, ephemeral=True))
+        asyncio.run(interactions.safe_defer(interaction, ephemeral=False))
+        asyncio.run(interactions.safe_defer(interaction, ephemeral=True))
 
         self.assertEqual(interaction.response.defer_calls, [False])
 
@@ -101,7 +101,7 @@ class UtilsTests(unittest.TestCase):
             image_path = Path(temp_dir) / "tiny.png"
             Image.new("RGB", (1, 1), color=(255, 0, 0)).save(image_path)
 
-            encoded = utils.encode_image_to_base64(str(image_path))
+            encoded = images.encode_image_to_base64(str(image_path))
 
             self.assertTrue(encoded.startswith("data:image/png;base64,"))
 
@@ -110,7 +110,7 @@ class UtilsTests(unittest.TestCase):
             file_path = Path(temp_dir) / "payload.unknownext"
             file_path.write_bytes(b"abc123")
 
-            encoded = utils.encode_image_to_base64(str(file_path))
+            encoded = images.encode_image_to_base64(str(file_path))
 
             self.assertTrue(encoded.startswith("data:application/octet-stream;base64,"))
 
@@ -119,7 +119,7 @@ class UtilsTests(unittest.TestCase):
             image_path = Path(temp_dir) / "tiny.jpg"
             Image.new("RGB", (10, 10), color=(255, 255, 255)).save(image_path, format="JPEG")
 
-            result = asyncio.run(utils.compress_image(str(image_path), max_size_kb=250))
+            result = asyncio.run(images.compress_image(str(image_path), max_size_kb=250))
 
             self.assertEqual(result, str(image_path))
 
@@ -128,19 +128,19 @@ class UtilsTests(unittest.TestCase):
             image_path = Path(temp_dir) / "large.bmp"
             Image.new("RGB", (1024, 1024), color=(255, 255, 255)).save(image_path, format="BMP")
 
-            result = asyncio.run(utils.compress_image(str(image_path), max_size_kb=50))
+            result = asyncio.run(images.compress_image(str(image_path), max_size_kb=50))
 
             self.assertTrue(result.endswith("_compressed.jpg"))
             self.assertTrue(Path(result).exists())
-            self.assertLess(utils.get_file_size_kb(result), utils.get_file_size_kb(str(image_path)))
+            self.assertLess(images.get_file_size_kb(result), images.get_file_size_kb(str(image_path)))
 
     def test_compress_image_returns_original_path_on_exception(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             image_path = Path(temp_dir) / "broken.jpg"
             image_path.write_bytes(b"not-an-image")
 
-            with mock.patch("cogs.utils.Image.open", side_effect=OSError("broken image")):
-                result = asyncio.run(utils.compress_image(str(image_path), max_size_kb=1))
+            with mock.patch("cogs.shared.images.Image.open", side_effect=OSError("broken image")):
+                result = asyncio.run(images.compress_image(str(image_path), max_size_kb=1))
 
             self.assertEqual(result, str(image_path))
 
@@ -148,15 +148,15 @@ class UtilsTests(unittest.TestCase):
         interaction = DummyInteraction(user_id=123, command_name="ping")
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_log_file = utils.COMMAND_LOG_FILE
-            utils.COMMAND_LOG_FILE = Path(temp_dir) / "runtime" / "logs" / "log.txt"
+            original_log_file = command_log.COMMAND_LOG_FILE
+            command_log.COMMAND_LOG_FILE = Path(temp_dir) / "runtime" / "logs" / "log.txt"
             try:
-                utils.log_slash_command(interaction, True)
-                log_path = Path(utils.COMMAND_LOG_FILE)
+                command_log.log_slash_command(interaction, True)
+                log_path = Path(command_log.COMMAND_LOG_FILE)
                 self.assertTrue(log_path.exists())
                 content = log_path.read_text(encoding="utf-8")
             finally:
-                utils.COMMAND_LOG_FILE = original_log_file
+                command_log.COMMAND_LOG_FILE = original_log_file
 
         self.assertIn("123", content)
         self.assertIn("/ping", content)
@@ -167,31 +167,31 @@ class UtilsTests(unittest.TestCase):
         interaction.command = None
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            original_log_file = utils.COMMAND_LOG_FILE
-            utils.COMMAND_LOG_FILE = Path(temp_dir) / "runtime" / "logs" / "log.txt"
+            original_log_file = command_log.COMMAND_LOG_FILE
+            command_log.COMMAND_LOG_FILE = Path(temp_dir) / "runtime" / "logs" / "log.txt"
             try:
-                utils.log_slash_command(interaction, False)
-                content = Path(utils.COMMAND_LOG_FILE).read_text(encoding="utf-8")
+                command_log.log_slash_command(interaction, False)
+                content = Path(command_log.COMMAND_LOG_FILE).read_text(encoding="utf-8")
             finally:
-                utils.COMMAND_LOG_FILE = original_log_file
+                command_log.COMMAND_LOG_FILE = original_log_file
 
         self.assertIn("456", content)
         self.assertIn("/Unknown", content)
         self.assertIn("失败", content)
 
     def test_ttl_cache_expires_entry(self):
-        cache = utils.TTLCache[str]()
-        cache.set("alpha", "value", ttl_seconds=0.01)
+        ttl_cache = cache.TTLCache[str]()
+        ttl_cache.set("alpha", "value", ttl_seconds=0.01)
 
-        self.assertEqual(cache.get("alpha"), "value")
+        self.assertEqual(ttl_cache.get("alpha"), "value")
 
         time.sleep(0.03)
 
-        self.assertIsNone(cache.get("alpha"))
-        self.assertNotIn("alpha", cache)
+        self.assertIsNone(ttl_cache.get("alpha"))
+        self.assertNotIn("alpha", ttl_cache)
 
     def test_cooldown_manager_check_and_update(self):
-        manager = utils.CooldownManager(default_seconds=0.05)
+        manager = cache.CooldownManager(default_seconds=0.05)
 
         first_hit = manager.check_and_update("message-1")
         second_hit = manager.check("message-1")
@@ -201,7 +201,7 @@ class UtilsTests(unittest.TestCase):
         self.assertGreaterEqual(second_hit[1], 1)
 
     def test_cooldown_manager_cleans_expired_entries(self):
-        manager = utils.CooldownManager(default_seconds=0.01)
+        manager = cache.CooldownManager(default_seconds=0.01)
         manager.set_cooldown("user-1")
 
         time.sleep(0.03)

@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cogs.utils import compress_image, encode_image_to_base64, get_file_size_kb
+from cogs.shared.images import compress_image, encode_image_to_base64, get_file_size_kb
 from paths import PROMPT_DIR
 
 logger = logging.getLogger(__name__)

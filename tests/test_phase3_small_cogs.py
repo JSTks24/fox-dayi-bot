@@ -8,7 +8,7 @@ from unittest import mock
 import cogs.quick_punish as quick_punish
 import cogs.tagger as tagger
 from cogs import broadcast, guild_guard, send, wiki_search
-from cogs.utils import (
+from cogs.shared.context_menus import (
     get_bot_should_guild_objects,
     register_guild_scoped_context_menus,
     remove_guild_scoped_context_menus,

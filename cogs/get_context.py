@@ -6,7 +6,9 @@ import io
 from datetime import datetime
 import asyncio
 import logging
-from cogs.utils import check_admin, log_slash_command, safe_defer as _safe_defer
+from cogs.shared.command_log import log_slash_command
+from cogs.shared.interactions import safe_defer as _safe_defer
+from cogs.shared.permissions import check_admin
 from paths import CONTEXT_TEMP_DIR
 
 # 配置日志

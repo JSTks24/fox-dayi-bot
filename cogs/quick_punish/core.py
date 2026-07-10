@@ -8,7 +8,7 @@ import json
 from typing import Any
 import aiofiles
 
-from cogs.utils import remove_guild_scoped_context_menus
+from cogs.shared.context_menus import remove_guild_scoped_context_menus
 from .commands import quick_punish_context, remote_quick_punish_context
 from paths import QUICK_PUNISH_SYNC_CONFIG_FILE, XIAOZUOWEN_DIR
 

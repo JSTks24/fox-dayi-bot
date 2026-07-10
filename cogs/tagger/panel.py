@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from datetime import datetime
 from typing import Any
-from cogs.utils import safe_defer as _safe_defer
+from cogs.shared.interactions import safe_defer as _safe_defer
 
 class Fox14TagModal(discord.ui.Modal):
     """消息上下文标记确认表单"""

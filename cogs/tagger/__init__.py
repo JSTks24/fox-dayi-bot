@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from discord.ext import commands
 
-from cogs.utils import register_guild_scoped_context_menus
+from cogs.shared.context_menus import register_guild_scoped_context_menus
 from .alert import TaggerAlertMixin
 from .core import TaggerCoreMixin
 from .db import TaggerDBMixin

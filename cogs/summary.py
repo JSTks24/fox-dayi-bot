@@ -4,7 +4,7 @@ from discord import app_commands
 import asyncio
 import os
 import re
-from cogs.utils import safe_defer as _safe_defer
+from cogs.shared.interactions import safe_defer as _safe_defer
 from paths import SUMMARY_PROMPT_DIR
 
 

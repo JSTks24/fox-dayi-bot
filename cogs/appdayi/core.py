@@ -11,7 +11,9 @@ import discord
 import openai
 from discord import app_commands
 from discord.ext import commands
-from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image, get_file_size_kb
+from cogs.shared.cache import CooldownManager
+from cogs.shared.images import compress_image, encode_image_to_base64, get_file_size_kb
+from cogs.shared.interactions import safe_defer
 from paths import APP_TEMP_DIR, PROMPT_DIR, SAVE_DIR
 
 from .stream import DEFAULT_SYSTEM_PROMPT, MAX_IMAGE_ATTACHMENTS, PUBLIC_ALLOWED_MENTIONS, REPLY_CHAIN_CONTEXT_SYSTEM_PROMPT, STREAM_TIMEOUT_SECONDS, PublicStreamReply, pick_spinning_status

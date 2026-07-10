@@ -6,7 +6,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.utils import CooldownManager, safe_defer, encode_image_to_base64, compress_image
+from cogs.shared.cache import CooldownManager
+from cogs.shared.images import compress_image, encode_image_to_base64
+from cogs.shared.interactions import safe_defer
 from paths import APP_TEMP_DIR
 
 from .url_matcher import URLMatcher

@@ -8,7 +8,9 @@ import io
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from cogs.utils import log_slash_command, remove_guild_scoped_context_menus, safe_defer as _safe_defer
+from cogs.shared.command_log import log_slash_command
+from cogs.shared.context_menus import remove_guild_scoped_context_menus
+from cogs.shared.interactions import safe_defer as _safe_defer
 
 from .db import _ensure_dirs_and_db
 from .panel import fox14_tag_context

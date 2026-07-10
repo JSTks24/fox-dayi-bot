@@ -5,7 +5,7 @@ from discord import app_commands
 from datetime import datetime
 import logging
 from typing import Any
-from cogs.utils import check_admin, check_admin_or_trusted
+from cogs.shared.permissions import check_admin, check_admin_or_trusted
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
