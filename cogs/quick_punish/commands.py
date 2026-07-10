@@ -45,6 +45,25 @@ def _scheduled_punish_validation_error(
     return None
 
 
+def _format_punishment_query_record(record: dict[str, Any], *, markdown_link: bool) -> str:
+    reason = record.get("reason") or "未记录"
+    executor_name = record.get("executor_name") or "未记录"
+    message_link = record.get("original_message_link")
+    if message_link:
+        message_text = f"[跳转]({message_link})" if markdown_link else message_link
+    else:
+        message_text = "无（同步/旧记录未保存）"
+    return (
+        f"全局处罚序号：{record.get('punish_count') or '未记录'}\n"
+        f"时间：{record.get('timestamp') or '未记录'}\n"
+        f"原因：{reason}\n"
+        f"执行者：{executor_name}\n"
+        f"状态：{record.get('status') or '未记录'}\n"
+        f"来源：{record.get('source_type') or 'local'}\n"
+        f"原消息：{message_text}"
+    )
+
+
 def _parse_quick_punish_message_link(message_link: str) -> tuple[int, int, int] | None:
     """Parse a Discord message link into guild/channel/message IDs."""
     if not message_link:
@@ -612,103 +631,78 @@ class QuickPunishCommandsMixin:
             ephemeral=True,
         )
 
-    @app_commands.command(name="快速处罚-查询", description="查询最近的快速处罚记录")
-    @app_commands.describe(count="要查询的记录数量（默认3条，最多1000条）")
+    @app_commands.command(name="快速处罚-查询", description="按用户查询快速处罚记录")
+    @app_commands.describe(user="选择要查询的用户", user_id="直接输入用户 ID（优先于用户选择器）")
     @app_commands.guild_only()
-    async def quick_punish_query(self, interaction: discord.Interaction, count: int | None = 3):
-        """查询快速处罚记录命令"""
-        # 立即defer响应
+    async def quick_punish_query(
+        self,
+        interaction: discord.Interaction,
+        user: discord.User | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        """Query all stored punishment statuses for one user ID."""
         await safe_defer(interaction)
-        
-        # 检查功能是否启用
         if not self.enabled:
-            await interaction.followup.send(
-                "❌ 快速处罚功能未启用",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ 快速处罚功能未启用", ephemeral=True)
             return
-        
-        # 检查权限
         if not self.has_permission(interaction):
-            await interaction.followup.send(
-                "❌ 您没有权限使用此命令",
-                ephemeral=True
-            )
+            await interaction.followup.send("❌ 您没有权限使用此命令", ephemeral=True)
             return
-        
-        # 处理默认值和范围限制
-        if count is None:
-            count = 3
-        count = min(count, 1000)
-        count = max(count, 1)
-        
-        # 获取记录
-        records = await self.get_recent_punishments(count)
-        
+
+        if user_id is not None:
+            resolved_user_id = user_id.strip()
+            if not re.fullmatch(r"[0-9]+", resolved_user_id) or int(resolved_user_id) <= 0:
+                await interaction.followup.send("❌ 无效的用户ID格式，请输入正十进制数字", ephemeral=True)
+                return
+        elif user is not None:
+            resolved_user_id = str(user.id)
+        else:
+            await interaction.followup.send("❌ 用户和用户ID至少填写一个", ephemeral=True)
+            return
+
+        records = await self.get_punishments_for_user(resolved_user_id)
         if not records:
             await interaction.followup.send(
-                "📝 暂无快速处罚记录",
-                ephemeral=True
+                f"📝 未找到用户 {resolved_user_id} 的快速处罚记录",
+                ephemeral=True,
             )
             return
-        
-        # 格式化记录
-        formatted_text = await self.format_punishment_records(records, interaction.guild)
-        
-        # 根据记录数量决定发送方式
-        if len(records) <= 10:
-            # 10条以内，使用Embed显示
-            embed = discord.Embed(
-                title=f"📋 最近 {len(records)} 条快速处罚记录",
-                description="",
-                color=discord.Color.blue(),
-                timestamp=datetime.now()
-            )
-            
-            for _i, record in enumerate(records, 1):
-                # 解析时间
-                try:
-                    timestamp = datetime.fromisoformat(record['timestamp'])
-                    time_str = timestamp.strftime('%m-%d %H:%M')
-                except Exception:
-                    time_str = record['timestamp'][:16]
-                
-                # 状态标记
-                status_emoji = {
-                    'executed': '✅',
-                    'failed': '❌',
-                    'revoked': '↩️'
-                }.get(record['status'], '❓')
-                
-                field_name = f"{status_emoji} #{record['id']} - {record['user_name']}"
-                field_value = (
-                    f"时间: {time_str}\n"
-                    f"来源: {record.get('source_type', 'local')}\n"
-                    f"原因: {record['reason'][:50]}{'...' if len(record['reason']) > 50 else ''}\n"
-                    f"执行者: {record['executor_name']}"
-                )
 
-                embed.add_field(name=field_name, value=field_value, inline=False)
-            
-            embed.set_footer(text=f"查询者: {interaction.user.name}")
-            
-            await interaction.followup.send(
-                embed=embed,
-                ephemeral=True
-            )
+        if user_id is None and user is not None:
+            display_name = getattr(user, "display_name", None) or getattr(user, "name", resolved_user_id)
         else:
-            # 超过10条，生成txt文件
-            file_content = formatted_text.encode('utf-8')
-            file = discord.File(
-                io.BytesIO(file_content),
-                filename=f"punish_records_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            display_name = records[0].get("user_name") or resolved_user_id
+        title = f"快速处罚记录：{display_name} ({resolved_user_id})"
+
+        if len(records) <= 10:
+            embed = discord.Embed(
+                title=title,
+                color=discord.Color.blue(),
+                timestamp=datetime.now(),
             )
-            
-            await interaction.followup.send(
-                f"📋 找到 {len(records)} 条快速处罚记录，已生成文件：",
-                file=file,
-                ephemeral=True
-            )
+            for record in records:
+                embed.add_field(
+                    name=f"记录 #{record['id']}",
+                    value=_format_punishment_query_record(record, markdown_link=True),
+                    inline=False,
+                )
+            embed.set_footer(text=f"查询者: {interaction.user.name}")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        formatted_records = [
+            f"记录 #{record['id']}\n{_format_punishment_query_record(record, markdown_link=False)}"
+            for record in records
+        ]
+        content = f"{title}\n\n" + "\n\n".join(formatted_records)
+        await interaction.followup.send(
+            f"📋 找到 {len(records)} 条快速处罚记录，已生成文件：",
+            file=discord.File(
+                io.BytesIO(content.encode("utf-8")),
+                filename=f"punish_records_{resolved_user_id}.txt",
+            ),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="快速处罚-撤销", description="撤销最近一次的快速处罚")
     @app_commands.describe(

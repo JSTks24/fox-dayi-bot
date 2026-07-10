@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -161,6 +162,42 @@ class MentionMetadataTests(unittest.TestCase):
 
 
 class QuickPunishTests(unittest.TestCase):
+    def test_user_punishment_query_returns_all_statuses_in_descending_order(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+
+        with temporary_workdir() as temp_dir:
+            original_path = quick_punish.db.QUICK_PUNISH_DB_PATH
+            quick_punish.db.QUICK_PUNISH_DB_PATH = str(Path(temp_dir) / "quick_punish.db")
+            try:
+                cog.init_database()
+                with sqlite3.connect(quick_punish.db.QUICK_PUNISH_DB_PATH) as connection:
+                    rows = [
+                        ("42", "Target", 1, "2026-01-02T00:00:00", "Admin", "first", "executed", "local", None),
+                        ("42", "Target", 2, "2026-01-02T00:00:00", "Admin", "second", "revoked", "sync", "https://discord.com/message"),
+                        ("42", "Target", 3, "2026-01-01T00:00:00", "", None, "failed", "local", None),
+                        ("99", "Other", 1, "2026-02-01T00:00:00", "Admin", "other", "executed", "local", None),
+                    ]
+                    connection.executemany(
+                        """
+                        INSERT INTO quick_punish_records
+                        (user_id, user_name, punish_count, timestamp, executor_id, executor_name,
+                         reason, status, source_type, original_message_link)
+                        VALUES (?, ?, ?, ?, '1', ?, ?, ?, ?, ?)
+                        """,
+                        rows,
+                    )
+                    expected_ids = [row[0] for row in connection.execute(
+                        "SELECT id FROM quick_punish_records WHERE user_id = '42' ORDER BY timestamp DESC, id DESC"
+                    )]
+
+                records = asyncio.run(cog.get_punishments_for_user("42"))
+            finally:
+                quick_punish.db.QUICK_PUNISH_DB_PATH = original_path
+
+        self.assertEqual([record["id"] for record in records], expected_ids)
+        self.assertEqual([record["status"] for record in records], ["revoked", "executed", "failed"])
+        self.assertIsNone(records[-1]["original_message_link"])
+
     def test_build_dm_content_uses_configured_links(self):
         cog = object.__new__(quick_punish.QuickPunishCog)
         cog.bot = DummyBot(guild=DummyGuild([DummyRole(7, "违规身份组")]))
@@ -702,6 +739,151 @@ class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         await quick_punish.QuickPunishCommandsMixin.scheduled_quick_punish_list.callback(cog, admin)
         self.assertIn("当前没有预约", admin.followup.send.await_args.args[0])
+
+    async def test_query_resolves_user_selector_and_user_id_with_id_precedence(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog.enabled = True
+        cog.has_permission = lambda interaction: True
+        cog.get_punishments_for_user = mock.AsyncMock(return_value=[])
+        selected_user = SimpleNamespace(id=42, display_name="Selected", name="selected")
+
+        async def query(user=None, user_id=None):
+            interaction = DummyInteraction(
+                DummyGuild(guild_id=1),
+                DummyClient(cog=cog),
+                user=SimpleNamespace(id=99, name="admin"),
+            )
+            interaction.client.fetch_user = mock.AsyncMock(side_effect=AssertionError("must not fetch user"))
+            await quick_punish.QuickPunishCommandsMixin.quick_punish_query.callback(
+                cog,
+                interaction,
+                user,
+                user_id,
+            )
+            return interaction
+
+        await query(selected_user, None)
+        cog.get_punishments_for_user.assert_awaited_once_with("42")
+
+        cog.get_punishments_for_user.reset_mock()
+        await query(None, " 43 ")
+        cog.get_punishments_for_user.assert_awaited_once_with("43")
+
+        cog.get_punishments_for_user.reset_mock()
+        await query(selected_user, "44")
+        cog.get_punishments_for_user.assert_awaited_once_with("44")
+
+        cog.get_punishments_for_user.reset_mock()
+        invalid = await query(selected_user, "bad")
+        cog.get_punishments_for_user.assert_not_awaited()
+        self.assertIn("无效的用户ID", invalid.followup.send.await_args.args[0])
+
+        missing = await query(None, None)
+        self.assertIn("至少填写一个", missing.followup.send.await_args.args[0])
+
+    async def test_query_uses_embed_with_all_fields_and_nullable_fallbacks(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog.enabled = True
+        cog.has_permission = lambda interaction: True
+        records = [
+            {
+                "id": index,
+                "user_id": "42",
+                "user_name": "Target",
+                "punish_count": index,
+                "timestamp": f"2026-01-0{index}T00:00:00",
+                "reason": None if index == 3 else f"reason-{index}",
+                "executor_name": "" if index == 3 else "Admin",
+                "status": status,
+                "source_type": "sync" if index == 2 else "local",
+                "original_message_link": "https://discord.com/message" if index == 1 else None,
+            }
+            for index, status in enumerate(("executed", "revoked", "failed"), 1)
+        ]
+        cog.get_punishments_for_user = mock.AsyncMock(return_value=records)
+        interaction = DummyInteraction(
+            DummyGuild(guild_id=1),
+            DummyClient(cog=cog),
+            user=SimpleNamespace(id=99, name="admin"),
+        )
+
+        await quick_punish.QuickPunishCommandsMixin.quick_punish_query.callback(
+            cog,
+            interaction,
+            SimpleNamespace(id=42, display_name="Target", name="target"),
+            None,
+        )
+
+        embed = interaction.followup.send.await_args.kwargs["embed"]
+        rendered = str(embed.to_dict())
+        self.assertEqual(len(embed.fields), 3)
+        for expected in ("executed", "revoked", "failed", "全局处罚序号", "时间", "原因", "执行者", "来源"):
+            self.assertIn(expected, rendered)
+        self.assertIn("[跳转](https://discord.com/message)", rendered)
+        self.assertIn("无（同步/旧记录未保存）", rendered)
+        self.assertIn("未记录", rendered)
+        self.assertNotIn("移除身份组", rendered)
+
+    async def test_query_uses_utf8_file_for_more_than_ten_records(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog.enabled = True
+        cog.has_permission = lambda interaction: True
+        records = [
+            {
+                "id": index,
+                "user_id": "42",
+                "user_name": "Target",
+                "punish_count": index,
+                "timestamp": f"2026-01-{index:02d}T00:00:00",
+                "reason": f"原因-{index}",
+                "executor_name": "Admin",
+                "status": "executed",
+                "source_type": "local",
+                "original_message_link": None,
+            }
+            for index in range(1, 12)
+        ]
+        cog.get_punishments_for_user = mock.AsyncMock(return_value=records)
+        interaction = DummyInteraction(
+            DummyGuild(guild_id=1),
+            DummyClient(cog=cog),
+            user=SimpleNamespace(id=99, name="admin"),
+        )
+
+        await quick_punish.QuickPunishCommandsMixin.quick_punish_query.callback(
+            cog,
+            interaction,
+            None,
+            "42",
+        )
+
+        file = interaction.followup.send.await_args.kwargs["file"]
+        file.fp.seek(0)
+        content = file.fp.read().decode("utf-8")
+        self.assertEqual(content.count("全局处罚序号："), 11)
+        self.assertIn("原因-11", content)
+        self.assertNotIn("移除身份组", content)
+
+    async def test_query_keeps_existing_quick_punish_permission(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog.enabled = True
+        cog.has_permission = lambda interaction: False
+        cog.get_punishments_for_user = mock.AsyncMock()
+        interaction = DummyInteraction(
+            DummyGuild(guild_id=1),
+            DummyClient(cog=cog, admins=[99], trusted_users=[99]),
+            user=SimpleNamespace(id=99, name="admin"),
+        )
+
+        await quick_punish.QuickPunishCommandsMixin.quick_punish_query.callback(
+            cog,
+            interaction,
+            None,
+            "42",
+        )
+
+        cog.get_punishments_for_user.assert_not_awaited()
+        self.assertIn("没有权限", interaction.followup.send.await_args.args[0])
 
     async def test_slash_quick_punish_opens_remote_modal_from_message_link(self):
         cog = self._build_quick_punish_cog()

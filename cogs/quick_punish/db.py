@@ -218,21 +218,18 @@ class QuickPunishDBMixin:
 
         return await asyncio.to_thread(_write_record)
 
-    async def get_recent_punishments(self, count: int = 3, max_count: int = 1000) -> list[dict]:
-        """获取最近的处罚记录"""
-        count = min(count, max_count)
-        count = max(count, 1)
-
-        def _read_recent() -> list[dict]:
+    async def get_punishments_for_user(self, user_id: str) -> list[dict]:
+        """Return every stored status for one user, newest first."""
+        def _read_records() -> list[dict]:
             with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, user_id, user_name, timestamp, channel_name,
-                           executor_name, reason, removed_roles, status, source_type
+                    SELECT id, user_id, user_name, punish_count, timestamp,
+                           reason, executor_name, status, source_type, original_message_link
                     FROM quick_punish_records
+                    WHERE user_id = ?
                     ORDER BY timestamp DESC, id DESC
-                    LIMIT ?
-                ''', (count,))
+                ''', (user_id,))
 
                 records = []
                 for row in cursor.fetchall():
@@ -240,56 +237,17 @@ class QuickPunishDBMixin:
                         'id': row[0],
                         'user_id': row[1],
                         'user_name': row[2],
-                        'timestamp': row[3],
-                        'channel_name': row[4],
-                        'executor_name': row[5],
-                        'reason': row[6],
-                        'removed_roles': self._parse_json_list(row[7]),
-                        'status': row[8],
-                        'source_type': row[9] or 'local'
+                        'punish_count': row[3],
+                        'timestamp': row[4],
+                        'reason': row[5],
+                        'executor_name': row[6],
+                        'status': row[7],
+                        'source_type': row[8] or 'local',
+                        'original_message_link': row[9],
                     })
                 return records
 
-        return await asyncio.to_thread(_read_recent)
-
-    async def format_punishment_records(self, records: list[dict], guild: discord.Guild) -> str:
-        """格式化处罚记录为文本"""
-        if not records:
-            return "暂无处罚记录"
-
-        lines = ["===== 快速处罚记录 =====\n"]
-
-        for i, record in enumerate(records, 1):
-            try:
-                timestamp = datetime.fromisoformat(record['timestamp'])
-                time_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
-            except Exception:
-                time_str = record['timestamp']
-
-            roles_str = "无"
-            if record['removed_roles']:
-                role_names = []
-                for role_id in record['removed_roles']:
-                    role = guild.get_role(role_id)
-                    if role:
-                        role_names.append(f"@{role.name}")
-                    else:
-                        role_names.append(f"ID:{role_id}")
-                roles_str = ", ".join(role_names)
-
-            lines.append(f"【记录 #{i}】")
-            lines.append(f"记录ID: {record['id']}")
-            lines.append(f"用户: {record['user_name']} (ID: {record['user_id']})")
-            lines.append(f"时间: {time_str}")
-            lines.append(f"频道: #{record['channel_name']}")
-            lines.append(f"执行者: {record['executor_name']}")
-            lines.append(f"来源: {record.get('source_type', 'local')}")
-            lines.append(f"原因: {record['reason']}")
-            lines.append(f"移除身份组: {roles_str}")
-            lines.append(f"状态: {record['status']}")
-            lines.append("-" * 50 + "\n")
-
-        return "\n".join(lines)
+        return await asyncio.to_thread(_read_records)
 
     def _row_to_record(self, row: tuple) -> dict[str, Any]:
         return {
