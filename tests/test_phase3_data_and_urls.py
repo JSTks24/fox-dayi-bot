@@ -1,11 +1,16 @@
 import json
+import asyncio
+import os
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from cogs import get_context, role_sync
 from cogs import pending_reviewer as pending_questions_reviewer
 from cogs.recognize_url.url_matcher import URLMatcher
+from cogs.recognize_url.check_cog import URLCheckCog
 from tests.conftest import temporary_workdir
 
 
@@ -36,6 +41,23 @@ class RecognizeUrlTests(unittest.TestCase):
             self.assertTrue(matcher.save_json(str(file_path), data))
 
             self.assertEqual(json.loads(file_path.read_text(encoding="utf-8")), data)
+
+    def test_context_menu_is_registered_and_removed_per_guild(self):
+        tree = SimpleNamespace(add_command=mock.Mock(), remove_command=mock.Mock())
+        bot = SimpleNamespace(tree=tree)
+
+        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111,222"}, clear=False):
+            cog = URLCheckCog(bot, self._make_matcher())
+            asyncio.run(cog.cog_unload())
+
+        self.assertEqual(
+            [call.kwargs["guild"].id for call in tree.add_command.call_args_list],
+            [111, 222],
+        )
+        self.assertEqual(
+            [call.kwargs["guild"].id for call in tree.remove_command.call_args_list],
+            [111, 222],
+        )
 
 
 class PendingReviewerTests(unittest.IsolatedAsyncioTestCase):

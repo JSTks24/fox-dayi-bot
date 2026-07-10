@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs.shared.cache import CooldownManager
+from cogs.shared.context_menus import register_guild_scoped_context_menus, remove_guild_scoped_context_menus
 from cogs.shared.images import compress_image, encode_image_to_base64
 from cogs.shared.interactions import safe_defer
 from paths import APP_TEMP_DIR
@@ -28,10 +29,10 @@ class URLCheckCog(commands.Cog):
             name='查成分',
             callback=self.check_url_compliance,
         )
-        self.bot.tree.add_command(self.ctx_menu)
+        register_guild_scoped_context_menus(self.bot.tree, [self.ctx_menu], label="URLCheckCog")
 
     async def cog_unload(self):
-        self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
+        remove_guild_scoped_context_menus(self.bot.tree, [self.ctx_menu])
 
     def _check_permission(self, user_id: int) -> bool:
         return user_id in self.bot.admins or user_id in self.bot.trusted_users

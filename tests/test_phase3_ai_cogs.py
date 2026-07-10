@@ -12,10 +12,16 @@ from cogs.summary import SUMMARY_TIMEOUT_SECONDS, Summary
 
 
 class DummyTree:
-    def add_command(self, _command):
+    def __init__(self):
+        self.added = []
+        self.removed = []
+
+    def add_command(self, command, *, guild=None):
+        self.added.append((command, guild))
         return None
 
-    def remove_command(self, _name, type=None):
+    def remove_command(self, name, *, guild=None, type=None):
+        self.removed.append((name, guild, type))
         return None
 
 
@@ -36,6 +42,22 @@ class AppDayiPhase3Tests(unittest.TestCase):
             content_type="image/png",
             filename=f"image_{index}.png",
             size=1024,
+        )
+
+    def test_context_menus_are_registered_and_removed_per_guild(self):
+        bot = DummyBot()
+
+        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111,222"}, clear=False):
+            cog = AppDayi(bot)
+            asyncio.run(cog.cog_unload())
+
+        self.assertEqual(
+            [(command.name, guild.id) for command, guild in bot.tree.added],
+            [("快速答疑", 111), ("联网答疑", 111), ("快速答疑", 222), ("联网答疑", 222)],
+        )
+        self.assertEqual(
+            [(name, guild.id) for name, guild, _command_type in bot.tree.removed],
+            [("快速答疑", 111), ("联网答疑", 111), ("快速答疑", 222), ("联网答疑", 222)],
         )
 
     def test_quick_dayi_no_longer_blocks_target_user_with_banlist(self):

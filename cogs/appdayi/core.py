@@ -12,6 +12,7 @@ import openai
 from discord import app_commands
 from discord.ext import commands
 from cogs.shared.cache import CooldownManager
+from cogs.shared.context_menus import register_guild_scoped_context_menus, remove_guild_scoped_context_menus
 from cogs.shared.images import compress_image, encode_image_to_base64, get_file_size_kb
 from cogs.shared.interactions import safe_defer
 from paths import APP_TEMP_DIR, PROMPT_DIR, SAVE_DIR
@@ -36,18 +37,20 @@ class AppDayiCoreMixin:
             name="快速答疑",
             callback=self.quick_dayi,
         )
-        self.bot.tree.add_command(self.ctx_menu)
 
         self.ctx_menu_search = app_commands.ContextMenu(
             name="联网答疑",
             callback=self.quick_dayi_search,
         )
-        self.bot.tree.add_command(self.ctx_menu_search)
+        register_guild_scoped_context_menus(
+            self.bot.tree,
+            [self.ctx_menu, self.ctx_menu_search],
+            label="AppDayi",
+        )
 
     async def cog_unload(self):
         """Cog 卸载时移除命令"""
-        self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
-        self.bot.tree.remove_command(self.ctx_menu_search.name, type=self.ctx_menu_search.type)
+        remove_guild_scoped_context_menus(self.bot.tree, [self.ctx_menu, self.ctx_menu_search])
 
     def _check_and_update_cooldown(self, message_id: int) -> tuple[bool, int]:
         """
