@@ -19,7 +19,7 @@ class DummyTree:
         self.removed = []
 
     def remove_command(self, name, *, guild=None, type):
-        self.removed.append((name, type))
+        self.removed.append((name, guild, type))
 
 
 class DummyRole:
@@ -239,11 +239,11 @@ class QuickPunishTests(unittest.TestCase):
             cog.cog_unload()
 
         self.assertEqual(
-            cog.bot.tree.removed,
+            [(name, guild.id, command_type) for name, guild, command_type in cog.bot.tree.removed],
             [
-                (quick_punish.quick_punish_context.name, quick_punish.quick_punish_context.type),
-                (quick_punish.remote_quick_punish_context.name, quick_punish.remote_quick_punish_context.type),
-                (quick_punish.scheduled_quick_punish_context.name, quick_punish.scheduled_quick_punish_context.type),
+                (quick_punish.quick_punish_context.name, 111, quick_punish.quick_punish_context.type),
+                (quick_punish.remote_quick_punish_context.name, 111, quick_punish.remote_quick_punish_context.type),
+                (quick_punish.scheduled_quick_punish_context.name, 111, quick_punish.scheduled_quick_punish_context.type),
             ],
         )
         scheduled_task.cancel.assert_called_once()
@@ -904,7 +904,7 @@ class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
 
 
 class Fox14TaggerTests(unittest.TestCase):
-    def test_cog_unload_cancels_task_and_removes_context_menu(self):
+    def test_cog_unload_cancels_task_and_removes_global_context_menu(self):
         task = type("Task", (), {"done": lambda self: False, "cancel": lambda self: setattr(self, "cancelled", True)})()
         task.cancelled = False
 
@@ -912,11 +912,13 @@ class Fox14TaggerTests(unittest.TestCase):
         cog.bot = DummyBot()
         cog._expiry_task = task
 
-        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111"}, clear=False):
-            cog.cog_unload()
+        cog.cog_unload()
 
         self.assertTrue(task.cancelled)
-        self.assertEqual(cog.bot.tree.removed, [(fox14_tagger.fox14_tag_context.name, fox14_tagger.fox14_tag_context.type)])
+        self.assertEqual(
+            cog.bot.tree.removed,
+            [(fox14_tagger.fox14_tag_context.name, None, fox14_tagger.fox14_tag_context.type)],
+        )
 
 
 if __name__ == "__main__":

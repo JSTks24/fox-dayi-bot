@@ -42,7 +42,7 @@ class RecognizeUrlTests(unittest.TestCase):
 
             self.assertEqual(json.loads(file_path.read_text(encoding="utf-8")), data)
 
-    def test_context_menu_is_registered_and_removed_per_guild(self):
+    def test_context_menu_is_registered_and_removed_globally(self):
         tree = SimpleNamespace(add_command=mock.Mock(), remove_command=mock.Mock())
         bot = SimpleNamespace(tree=tree)
 
@@ -50,14 +50,8 @@ class RecognizeUrlTests(unittest.TestCase):
             cog = URLCheckCog(bot, self._make_matcher())
             asyncio.run(cog.cog_unload())
 
-        self.assertEqual(
-            [call.kwargs["guild"].id for call in tree.add_command.call_args_list],
-            [111, 222],
-        )
-        self.assertEqual(
-            [call.kwargs["guild"].id for call in tree.remove_command.call_args_list],
-            [111, 222],
-        )
+        tree.add_command.assert_called_once_with(cog.ctx_menu)
+        tree.remove_command.assert_called_once_with(cog.ctx_menu.name, type=cog.ctx_menu.type)
 
 
 class PendingReviewerTests(unittest.IsolatedAsyncioTestCase):

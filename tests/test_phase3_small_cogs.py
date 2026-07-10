@@ -183,7 +183,20 @@ class WikiSearchCooldownTests(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class GuildScopedContextMenuTests(unittest.TestCase):
+class ContextMenuScopeTests(unittest.TestCase):
+    def test_tagger_context_menu_is_registered_globally(self):
+        bot = SimpleNamespace(add_cog=mock.AsyncMock(), tree=SimpleNamespace(add_command=mock.Mock()))
+        cog = object()
+
+        with (
+            mock.patch.object(tagger, "Fox14Tagger", return_value=cog),
+            mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111,222"}, clear=False),
+        ):
+            asyncio.run(tagger.setup(bot))
+
+        bot.add_cog.assert_awaited_once_with(cog)
+        bot.tree.add_command.assert_called_once_with(tagger.fox14_tag_context)
+
     def test_get_bot_should_guild_objects_dedupes_and_reports_invalid_items(self):
         with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111, 222, 111, bad"}, clear=False):
             guilds, invalid_items = get_bot_should_guild_objects()
@@ -197,17 +210,16 @@ class GuildScopedContextMenuTests(unittest.TestCase):
             quick_punish.quick_punish_context,
             quick_punish.remote_quick_punish_context,
             quick_punish.scheduled_quick_punish_context,
-            tagger.fox14_tag_context,
         ]
 
         with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111,222"}, clear=False):
             guild_ids = register_guild_scoped_context_menus(tree, commands, label="Test")
 
         self.assertEqual(guild_ids, [111, 222])
-        self.assertEqual(tree.add_command.call_count, 8)
+        self.assertEqual(tree.add_command.call_count, 6)
         self.assertEqual(
             [call.kwargs["guild"].id for call in tree.add_command.call_args_list],
-            [111, 111, 111, 111, 222, 222, 222, 222],
+            [111, 111, 111, 222, 222, 222],
         )
 
     def test_remove_guild_scoped_context_menus_removes_each_command_per_guild(self):
@@ -216,16 +228,15 @@ class GuildScopedContextMenuTests(unittest.TestCase):
             quick_punish.quick_punish_context,
             quick_punish.remote_quick_punish_context,
             quick_punish.scheduled_quick_punish_context,
-            tagger.fox14_tag_context,
         ]
 
         with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111,222"}, clear=False):
             remove_guild_scoped_context_menus(tree, commands)
 
-        self.assertEqual(tree.remove_command.call_count, 8)
+        self.assertEqual(tree.remove_command.call_count, 6)
         self.assertEqual(
             [call.kwargs["guild"].id for call in tree.remove_command.call_args_list],
-            [111, 111, 111, 111, 222, 222, 222, 222],
+            [111, 111, 111, 222, 222, 222],
         )
 
 
