@@ -113,7 +113,7 @@ class QuickPunishNotifyMixin:
                             removed_roles: list[int], record_id: int,
                             trigger_guild: discord.Guild | None = None,
                             sync_results: list[dict[str, Any]] | None = None,
-                            original_message: discord.Message | None = None):
+                            original_message: discord.Message | None = None) -> discord.Message | None:
         """发送日志Embed到指定频道，并转发原消息"""
         embed = discord.Embed(
             title="⚠️ 答题处罚执行",
@@ -156,107 +156,29 @@ class QuickPunishNotifyMixin:
 
         try:
             await channel.send(embed=embed)
-
-            if original_message:
-                await self._forward_original_message(channel, original_message, user)
         except Exception as e:
             print(f"发送日志Embed时出错: {e}")
+            return None
 
-    async def _forward_original_message(self, channel: discord.abc.Messageable,
-                                       message: discord.Message,
-                                       punished_user: discord.User):
-        """转发被处罚的原消息到日志频道"""
+        if original_message:
+            return await self._forward_original_message(channel, original_message)
+        return None
+
+    async def _forward_original_message(
+        self,
+        channel: discord.abc.Messageable,
+        message: discord.Message,
+    ) -> discord.Message | None:
+        """Create an immutable Discord snapshot of the punished message."""
         try:
-            # 检查消息是否仍然存在
-            try:
-                # 尝试重新获取消息，确保它仍然存在
-                fresh_message = await message.channel.fetch_message(message.id)
-            except (discord.NotFound, discord.HTTPException):
-                # 消息已被删除
-                fallback_embed = discord.Embed(
-                    title="📝 原消息内容（已删除）",
-                    description="*消息已被删除，无法获取内容*",
-                    color=discord.Color.greyple()
-                )
-                fallback_embed.add_field(
-                    name="消息信息",
-                    value=f"作者: {punished_user.mention}\n"
-                          f"频道: <#{message.channel.id}>\n"
-                          f"消息ID: {message.id}",
-                    inline=False
-                )
-                await channel.send(embed=fallback_embed)
-                return
-            
-            # 构建转发的Embed
-            forward_embed = discord.Embed(
-                title="📝 被处罚的原消息",
-                color=discord.Color.dark_grey(),
-                timestamp=fresh_message.created_at
-            )
-            
-            # 添加作者信息
-            forward_embed.set_author(
-                name=f"{fresh_message.author.display_name} (@{fresh_message.author.name})",
-                icon_url=fresh_message.author.avatar.url if fresh_message.author.avatar else None
-            )
-            
-            # 添加消息内容
-            content = fresh_message.content[:4000] if fresh_message.content else "*无文本内容*"
-            if len(fresh_message.content) > 4000:
-                content += "\n...*内容过长已截断*"
-            forward_embed.add_field(name="消息内容", value=content, inline=False)
-            
-            # 添加频道和时间信息
-            guild_path = str(fresh_message.guild.id) if fresh_message.guild else "@me"
-            forward_embed.add_field(
-                name="位置",
-                value=f"频道: <#{fresh_message.channel.id}>\n"
-                      f"[跳转到原消息](https://discord.com/channels/{guild_path}/{fresh_message.channel.id}/{fresh_message.id})",
-                inline=False
-            )
-            
-            # 如果有附件，添加附件信息
-            if fresh_message.attachments:
-                attachments_info = []
-                for att in fresh_message.attachments[:5]:  # 最多显示5个附件
-                    attachments_info.append(f"• [{att.filename}]({att.url})")
-                if len(fresh_message.attachments) > 5:
-                    attachments_info.append(f"*...还有 {len(fresh_message.attachments) - 5} 个附件*")
-                forward_embed.add_field(
-                    name=f"附件 ({len(fresh_message.attachments)})",
-                    value="\n".join(attachments_info),
-                    inline=False
-                )
-            
-            # 如果有嵌入（Embeds），添加说明
-            if fresh_message.embeds:
-                forward_embed.add_field(
-                    name="嵌入内容",
-                    value=f"*包含 {len(fresh_message.embeds)} 个嵌入内容*",
-                    inline=False
-                )
-            
-            # 如果有贴纸（Stickers），添加贴纸信息
-            if fresh_message.stickers:
-                stickers_info = ", ".join([sticker.name for sticker in fresh_message.stickers])
-                forward_embed.add_field(
-                    name="贴纸",
-                    value=stickers_info,
-                    inline=False
-                )
-            
-            await channel.send(embed=forward_embed)
-            
+            return await message.forward(channel)
         except Exception as e:
-            print(f"转发原消息时出错: {e}")
-            # 发送错误信息
-            error_embed = discord.Embed(
-                title="⚠️ 无法转发原消息",
-                description=f"转发消息时发生错误：{str(e)}",
-                color=discord.Color.orange()
-            )
-            await channel.send(embed=error_embed)
+            print(f"创建原消息快照时出错: {type(e).__name__}: {e}")
+            try:
+                await channel.send("⚠️ 无法创建原消息快照；处罚日志已保留。")
+            except Exception as warning_error:
+                print(f"发送原消息快照失败警告时出错: {type(warning_error).__name__}: {warning_error}")
+            return None
 
     async def _build_dm_content(self, target_message: discord.Message | None,
                                reason: str, executor: discord.User,

@@ -190,6 +190,69 @@ class QuickPunishTests(unittest.TestCase):
             ],
         )
 
+    def test_log_embed_forwards_original_message_to_each_destination(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        snapshot = SimpleNamespace(jump_url="https://discord.com/snapshot")
+        original_message = SimpleNamespace(
+            forward=mock.AsyncMock(return_value=snapshot),
+            attachments=[SimpleNamespace(filename="evidence.png", url="https://cdn.example/expired")],
+        )
+        destinations = [
+            SimpleNamespace(send=mock.AsyncMock()),
+            SimpleNamespace(send=mock.AsyncMock()),
+        ]
+        user = SimpleNamespace(id=1, mention="<@1>")
+        executor = SimpleNamespace(mention="<@2>")
+
+        async def send_logs():
+            return [
+                await cog.send_log_embed(
+                    channel=destination,
+                    user=user,
+                    executor=executor,
+                    reason="测试",
+                    message_link="https://discord.com/original",
+                    removed_roles=[],
+                    record_id=3,
+                    original_message=original_message,
+                )
+                for destination in destinations
+            ]
+
+        self.assertEqual(asyncio.run(send_logs()), [snapshot, snapshot])
+        self.assertEqual(original_message.forward.await_count, 2)
+        self.assertEqual(
+            [call.args[0] for call in original_message.forward.await_args_list],
+            destinations,
+        )
+        for destination in destinations:
+            destination.send.assert_awaited_once()
+            self.assertEqual(destination.send.await_args.kwargs["embed"].title, "⚠️ 答题处罚执行")
+            self.assertNotIn("cdn.example/expired", str(destination.send.await_args.kwargs["embed"].to_dict()))
+
+    def test_snapshot_failure_keeps_log_and_sends_warning(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        original_message = SimpleNamespace(forward=mock.AsyncMock(side_effect=RuntimeError("forward failed")))
+        destination = SimpleNamespace(send=mock.AsyncMock())
+
+        result = asyncio.run(
+            cog.send_log_embed(
+                channel=destination,
+                user=SimpleNamespace(id=1, mention="<@1>"),
+                executor=SimpleNamespace(mention="<@2>"),
+                reason="测试",
+                message_link="https://discord.com/original",
+                removed_roles=[],
+                record_id=3,
+                original_message=original_message,
+            )
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(destination.send.await_count, 2)
+        self.assertEqual(destination.send.await_args_list[0].kwargs["embed"].title, "⚠️ 答题处罚执行")
+        self.assertIn("无法创建原消息快照", destination.send.await_args_list[1].args[0])
+
 
 class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
     def _build_quick_punish_cog(self):
