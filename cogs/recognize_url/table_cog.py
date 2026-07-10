@@ -31,7 +31,7 @@ class URLTableCog(commands.Cog):
 
     def _log_operation_to_history(
         self,
-        user: discord.User,
+        user: discord.User | discord.Member,
         operation_type: str,
         url: str,
         name: str | None = None,
@@ -236,7 +236,7 @@ class URLTableCog(commands.Cog):
             domain, path = self.matcher.normalize(url)
             normalized_url = domain + path if path else domain
 
-            if status == 'good':
+            if status == 'good' and entry is not None:
                 result = (
                     f"**状态:** ✅ 合规\n"
                     f"**URL:** `{normalized_url}`\n"
@@ -244,7 +244,7 @@ class URLTableCog(commands.Cog):
                     f"**名称:** {entry['name'] or '(无)'}\n"
                     f"**描述:** {entry['description'] or '(无)'}"
                 )
-            elif status == 'bad':
+            elif status == 'bad' and entry is not None:
                 result = (
                     f"**状态:** 🚫 违规\n"
                     f"**URL:** `{normalized_url}`\n"

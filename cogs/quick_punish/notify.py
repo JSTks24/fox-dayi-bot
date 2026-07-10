@@ -113,7 +113,7 @@ class QuickPunishNotifyMixin:
                             removed_roles: list[int], record_id: int,
                             trigger_guild: discord.Guild | None = None,
                             sync_results: list[dict[str, Any]] | None = None,
-                            original_message: discord.Message = None):
+                            original_message: discord.Message | None = None):
         """发送日志Embed到指定频道，并转发原消息"""
         embed = discord.Embed(
             title="⚠️ 答题处罚执行",
@@ -162,7 +162,7 @@ class QuickPunishNotifyMixin:
         except Exception as e:
             print(f"发送日志Embed时出错: {e}")
 
-    async def _forward_original_message(self, channel: discord.TextChannel,
+    async def _forward_original_message(self, channel: discord.abc.Messageable,
                                        message: discord.Message,
                                        punished_user: discord.User):
         """转发被处罚的原消息到日志频道"""
@@ -208,10 +208,11 @@ class QuickPunishNotifyMixin:
             forward_embed.add_field(name="消息内容", value=content, inline=False)
             
             # 添加频道和时间信息
+            guild_path = str(fresh_message.guild.id) if fresh_message.guild else "@me"
             forward_embed.add_field(
                 name="位置",
                 value=f"频道: <#{fresh_message.channel.id}>\n"
-                      f"[跳转到原消息](https://discord.com/channels/{fresh_message.guild.id}/{fresh_message.channel.id}/{fresh_message.id})",
+                      f"[跳转到原消息](https://discord.com/channels/{guild_path}/{fresh_message.channel.id}/{fresh_message.id})",
                 inline=False
             )
             
@@ -257,7 +258,7 @@ class QuickPunishNotifyMixin:
             )
             await channel.send(embed=error_embed)
 
-    async def _build_dm_content(self, target_message: discord.Message,
+    async def _build_dm_content(self, target_message: discord.Message | None,
                                reason: str, executor: discord.User,
                                punish_count: int,
                                dm_template_filename: str | None = None,
@@ -309,7 +310,7 @@ class QuickPunishNotifyMixin:
 
         dm_parts = [
             "# === 重新答题通知 ===\n",
-            f"你好，\n",
+            "你好，\n",
             f"由于 {reason}，你在以下服务器的一些身份组已被移除：{server_role_text}。\n",
             f"此操作在{confirm_time}由{executor.name}确认。\n",
             third_content.strip(),
@@ -325,7 +326,7 @@ class QuickPunishNotifyMixin:
                 "\n## ⚠️ 请勿回复此消息，机器人不会读取或转发私信。\n\n"
                 f"在**重新阅读上方内容和{rules_text}之后**，如果你认为本次处罚存在事实性错误"
                 "（例如：处罚对象搞错了、使用的API/云酒馆被误认为违规第三方提供等），"
-                f"请使用 `📪|意见与投诉投稿` 频道申诉。\n\n"
+                f"请使用 <#{self.appeal_channel_id}> 频道申诉。\n\n"
                 "⛔ **以下无效申诉将不予回复：**\n"
                 " - 不读完上方说明和社区rule就开ticket，只反问「我做了什么」，「凭什么罚我」的\n"
                 "- 以「不理解相关规则」或「不知道相关规则」为理由，主张无知者无罪的\n"

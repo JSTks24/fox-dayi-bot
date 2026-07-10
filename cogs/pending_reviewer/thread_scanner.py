@@ -1,6 +1,5 @@
 """帖子数据抓取 + AI 批处理调用。"""
 
-import asyncio
 import datetime
 import json
 from collections.abc import Sequence
@@ -127,7 +126,7 @@ class ThreadScanner:
 
         resolved_tag = next((t for t in forum_channel.available_tags if t.id == self._resolved_tag_id), None)
         if not resolved_tag:
-            print(f"❌ [Unanswered] 找不到已解决标签")
+            print("❌ [Unanswered] 找不到已解决标签")
             return None, None, [], []
 
         unsolved_tag = next((t for t in forum_channel.available_tags if t.id == self._unsolved_tag_id), None)
@@ -140,7 +139,7 @@ class ThreadScanner:
         all_threads = list(forum_channel.threads)
         try:
             async for t in forum_channel.archived_threads(limit=50):
-                if t.created_at >= target_date:
+                if t.created_at is not None and t.created_at >= target_date:
                     all_threads.append(t)
         except discord.HTTPException as e:
             print(f"⚠️ [Unanswered] 获取归档帖子失败: {e}")
@@ -150,7 +149,8 @@ class ThreadScanner:
         for thread in all_threads:
             if resolved_tag in thread.applied_tags:
                 continue
-            if thread.created_at < target_date:
+            thread_created_at = thread.created_at
+            if thread_created_at is None or thread_created_at < target_date:
                 continue
 
             try:
@@ -213,7 +213,7 @@ class ThreadScanner:
                 "data": {
                     "id": thread.id,
                     "title": thread.name,
-                    "created_at": str(thread.created_at),
+                    "created_at": str(thread_created_at),
                     "days_silent": days_silent,
                     "true_reply_count": true_reply_count,
                     "starter_content": starter_content_text,

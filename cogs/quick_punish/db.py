@@ -208,7 +208,10 @@ class QuickPunishDBMixin:
                         json.dumps(rrbg, ensure_ascii=False),
                         source_guild_id
                     ))
-                    return cursor.lastrowid, resolved_count
+                    record_id = cursor.lastrowid
+                    if record_id is None:
+                        raise RuntimeError("数据库未返回处罚记录 ID")
+                    return record_id, resolved_count
             except Exception as e:
                 print(f"数据库事务错误: {e}")
                 raise

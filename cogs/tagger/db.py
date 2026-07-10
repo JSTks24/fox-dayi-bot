@@ -81,7 +81,10 @@ class TaggerDBMixin:
                     expire_input,
                     int(scope_id)
                 ))
-                return cur.lastrowid
+                record_id = cur.lastrowid
+                if record_id is None:
+                    raise RuntimeError("数据库未返回标记记录 ID")
+                return record_id
 
         return await asyncio.to_thread(_write)
 

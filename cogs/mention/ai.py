@@ -8,6 +8,9 @@ import logging
 import traceback
 import tiktoken
 import time
+from pathlib import Path
+from typing import Any
+
 from cogs.utils import compress_image, encode_image_to_base64, get_file_size_kb
 from paths import PROMPT_DIR
 
@@ -21,6 +24,7 @@ class MentionAIMixin:
     async def generate_ai_response(self, message: discord.Message, thread_id: str):
         """生成AI回复（流式）"""
         temp_files = []  # 用于跟踪需要清理的临时文件
+        processing_msg: discord.Message | None = None
         
         try:
             # 发送处理中的消息
@@ -53,7 +57,7 @@ class MentionAIMixin:
             # 构建用户消息内容（支持多模态）
             if compressed_image_paths:
                 # 有图片：构建多模态消息
-                user_content = [{"type": "text", "text": user_message_content}]
+                user_content: list[dict[str, Any]] = [{"type": "text", "text": user_message_content}]
                 for img_path in compressed_image_paths:
                     size_kb = get_file_size_kb(img_path)
                     logger.info(f"📎 添加图片到API请求: {os.path.basename(img_path)} ({size_kb:.2f}KB)")
@@ -63,7 +67,7 @@ class MentionAIMixin:
                         "image_url": {"url": base64_image}
                     })
                 
-                messages = [
+                messages: list[dict[str, Any]] = [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content}
                 ]
@@ -190,13 +194,15 @@ class MentionAIMixin:
             logger.info(f"成功生成AI回复 (thread: {thread_id}, user: {message.author.id}, length: {len(ai_response)})")
             
         except asyncio.TimeoutError:
-            await processing_msg.edit(content="⏱️ 处理超时，请稍后再试")
+            if processing_msg is not None:
+                await processing_msg.edit(content="⏱️ 处理超时，请稍后再试")
             logger.warning(f"AI生成超时 (thread: {thread_id})")
         except Exception as e:
             logger.error(f"AI生成失败: {e}")
             logger.error(traceback.format_exc())
             try:
-                await processing_msg.edit(content=f"❌ 生成失败: {str(e)}")
+                if processing_msg is not None:
+                    await processing_msg.edit(content=f"❌ 生成失败: {str(e)}")
             except Exception:
                 pass
         finally:
@@ -238,7 +244,7 @@ class MentionAIMixin:
                     # 保存图片到临时目录
                     _, ext = os.path.splitext(attachment.filename)
                     temp_path = os.path.join(self.temp_dir, f"{timestamp}_{user_id}_{idx}{ext}")
-                    await attachment.save(temp_path)
+                    await attachment.save(Path(temp_path))
                     image_paths.append(temp_path)
                     logger.info(f"  保存当前消息图片 {idx+1}: {attachment.filename} ({attachment.size / 1024:.2f} KB)")
                 except Exception as e:
@@ -264,7 +270,7 @@ class MentionAIMixin:
                             # 保存被回复消息的图片到临时目录
                             _, ext = os.path.splitext(attachment.filename)
                             temp_path = os.path.join(self.temp_dir, f"{timestamp}_replied_{replied_user_id}_{idx}{ext}")
-                            await attachment.save(temp_path)
+                            await attachment.save(Path(temp_path))
                             image_paths.append(temp_path)
                             logger.info(f"  保存被回复消息图片 {idx+1}: {attachment.filename} ({attachment.size / 1024:.2f} KB)")
                         except Exception as e:
@@ -369,7 +375,8 @@ class MentionAIMixin:
             if embed.fields:
                 field_texts = []
                 for field in embed.fields[:3]:  # 最多提取3个字段
-                    field_texts.append(f"{field.name}: {field.value[:100]}")
+                    field_value = field.value or ""
+                    field_texts.append(f"{field.name}: {field_value[:100]}")
                 if field_texts:
                     parts.append(f"[Embed字段: {'; '.join(field_texts)}]")
             

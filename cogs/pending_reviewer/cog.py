@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from paths import REVIEWER_DB
 
-from .ai_parser import stringify_ai_content
 from .thread_cache import ThreadCache
 from .thread_scanner import ThreadScanner
 
@@ -370,11 +369,11 @@ class UnansweredFilter(commands.Cog):
         else:
             self._last_ai_response_note = "本次扫描无需 AI 判定（无新增/变更帖子）"
 
-        batch_logs_map: dict[int, dict[str, Any]] = {
-            int(log.get("batch_index")): log
-            for log in self._ai_request_logs
-            if log.get("batch_index") is not None
-        }
+        batch_logs_map: dict[int, dict[str, Any]] = {}
+        for log in self._ai_request_logs:
+            batch_index = log.get("batch_index")
+            if batch_index is not None:
+                batch_logs_map[int(batch_index)] = log
 
         # 2. 结果汇总
         final_solved = []
@@ -470,7 +469,7 @@ class UnansweredFilter(commands.Cog):
         # 4. 执行操作：发送汇报
         if final_unsolved and REPORT_CHANNEL_ID:
             report_channel = self.bot.get_channel(REPORT_CHANNEL_ID)
-            if report_channel:
+            if isinstance(report_channel, discord.abc.Messageable):
                 zero_replies = [x for x in final_unsolved if x[1] == 0]
                 others = [x for x in final_unsolved if x[1] > 0]
 
@@ -524,8 +523,12 @@ class UnansweredFilter(commands.Cog):
         if not isinstance(thread.parent, discord.ForumChannel):
             return
 
+        thread_created_at = thread.created_at
+        if thread_created_at is None:
+            return
+
         now = datetime.datetime.now(datetime.timezone.utc)
-        thread_age = now - thread.created_at
+        thread_age = now - thread_created_at
         if thread_age.days >= 14:
             return
 
