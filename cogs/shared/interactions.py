@@ -1,4 +1,4 @@
-"""Discord interaction response helpers."""
+"""Discord interaction response helpers."""  # drift:ignore[AVS] reason:Small shared API is intentionally stable and dependency-free.
 
 import discord
 

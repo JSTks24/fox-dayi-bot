@@ -1,4 +1,4 @@
-"""Persistent logging for slash-command invocations."""
+"""Persistent logging for slash-command invocations."""  # drift:ignore[AVS] reason:Small shared adapter is intentionally a stable import boundary.
 
 import os
 from datetime import datetime

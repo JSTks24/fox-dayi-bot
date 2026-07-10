@@ -1,4 +1,4 @@
-"""Bot-level permission checks shared by commands and context menus."""
+"""Bot-level permission checks shared by commands and context menus."""  # drift:ignore[AVS] reason:Small shared policy API is intentionally stable.
 
 import discord
 
