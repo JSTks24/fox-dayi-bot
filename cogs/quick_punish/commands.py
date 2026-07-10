@@ -7,11 +7,42 @@ import re
 from typing import Any
 import io
 from cogs.shared.interactions import safe_defer
+from cogs.shared.permissions import check_admin_or_trusted
 
 
 _QUICK_PUNISH_MESSAGE_LINK_RE = re.compile(
     r"^https://(?:discord(?:app)?\.com)/channels/(\d+)/(\d+)/(\d+)$"
 )
+_SCHEDULED_DELAY_RE = re.compile(r"^([1-9]\d*)([mh])$")
+
+
+def parse_scheduled_delay(value: str) -> int:
+    """Parse a strict 1-120 minute or 1-2 hour delay."""
+    match = _SCHEDULED_DELAY_RE.fullmatch(value)
+    if not match:
+        raise ValueError("延迟时间必须为 1m-120m 或 1h-2h")
+
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if (unit == "m" and amount <= 120) or (unit == "h" and amount <= 2):
+        return amount * (60 if unit == "m" else 3600)
+    raise ValueError("延迟时间必须为 1m-120m 或 1h-2h")
+
+
+def _scheduled_punish_validation_error(
+    interaction: discord.Interaction,
+    message: discord.Message,
+    cog: Any,
+) -> str | None:
+    if not cog.enabled:
+        return "❌ 预约送走功能未启用，请联系机器人开发者。"
+    if interaction.guild is None:
+        return "❌ 该命令只能在服务器内使用。"
+    if not check_admin_or_trusted(interaction):
+        return "❌ 没权。只有管理员和 trusted_user 可以预约送走。"
+    if message.author.bot:
+        return "❌ 不能对Bot使用这个命令。"
+    return None
 
 
 def _parse_quick_punish_message_link(message_link: str) -> tuple[int, int, int] | None:
@@ -209,7 +240,7 @@ class RemoteQuickPunishModal(discord.ui.Modal):
         chosen_template = selected_values[0] if selected_values and selected_values[0] != "__none__" else "default.txt"
 
         success, message, punishment_history = await self.cog.execute_punishment(
-            interaction=interaction,
+            trigger_guild=interaction.guild,
             target_user=self.target_user,
             target_message=self.target_message,
             reason=reason,
@@ -227,6 +258,62 @@ class RemoteQuickPunishModal(discord.ui.Modal):
             await interaction.followup.send(f"❌ 发生错误：{str(error)}", ephemeral=True)
         except Exception:
             pass
+
+
+class ScheduledQuickPunishModal(discord.ui.Modal):
+    """Schedule a punishment after collecting the remote-punish fields."""
+
+    def __init__(self, target_message: discord.Message, cog: Any) -> None:
+        super().__init__(title=f"预约送走 - {target_message.author.display_name}")
+        self.target_message = target_message
+        self.cog = cog
+
+        self.reason = discord.ui.TextInput(
+            placeholder="请输入处罚原因（留空则使用默认值'违规第三方'）",
+            required=False,
+            max_length=100,
+            style=discord.TextStyle.short,
+        )
+        self.add_item(discord.ui.Label(text="处罚原因", component=self.reason))
+
+        self.template_select = discord.ui.Select(
+            placeholder="选择私信模板（选择“默认”则使用第三方API）",
+            min_values=1,
+            max_values=1,
+            options=self.cog._get_dm_template_select_options(),
+        )
+        self.add_item(discord.ui.Label(text="私信模板", component=self.template_select))
+
+        self.delay = discord.ui.TextInput(
+            placeholder="例如 30m 或 2h",
+            required=True,
+            max_length=4,
+            style=discord.TextStyle.short,
+        )
+        self.add_item(discord.ui.Label(text="延迟时间", description="允许 1m-120m 或 1h-2h", component=self.delay))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await safe_defer(interaction)
+        if error_message := _scheduled_punish_validation_error(interaction, self.target_message, self.cog):
+            await interaction.followup.send(error_message, ephemeral=True)
+            return
+        try:
+            delay_seconds = parse_scheduled_delay(self.delay.value)
+        except ValueError as error:
+            await interaction.followup.send(f"❌ {error}", ephemeral=True)
+            return
+
+        selected_values = getattr(self.template_select, "values", []) or []
+        chosen_template = selected_values[0] if selected_values and selected_values[0] != "__none__" else "default.txt"
+        success, message = await self.cog.schedule_punishment(
+            target_message=self.target_message,
+            trigger_guild=interaction.guild,
+            creator=interaction.user,
+            reason=self.reason.value.strip() or "违规第三方",
+            dm_template_filename=chosen_template,
+            delay_seconds=delay_seconds,
+        )
+        await interaction.followup.send(("✅ " if success else "❌ ") + message, ephemeral=True)
 
 
 async def _send_quick_punish_modal(
@@ -268,7 +355,7 @@ class QuickPunishConfirmView(discord.ui.View):
 
         # 执行处罚
         success, message, punishment_history = await self.cog.execute_punishment(
-            interaction=interaction,
+            trigger_guild=interaction.guild,
             target_user=self.target_user,
             target_message=self.target_message,
             reason=self.reason,
@@ -431,6 +518,21 @@ async def remote_quick_punish_context(interaction: discord.Interaction, message:
 
     await _send_quick_punish_modal(interaction, message, cog, "remote")
 
+
+@app_commands.context_menu(name="预约送走")
+@app_commands.guild_only()
+async def scheduled_quick_punish_context(interaction: discord.Interaction, message: discord.Message) -> None:
+    """Open the in-memory scheduled punishment modal."""
+    cog = interaction.client.get_cog("QuickPunishCog")
+    if not cog:
+        await interaction.response.send_message("❌ 模块未加载", ephemeral=True)
+        return
+    if error_message := _scheduled_punish_validation_error(interaction, message, cog):
+        await interaction.response.send_message(error_message, ephemeral=True)
+        return
+
+    await interaction.response.send_modal(ScheduledQuickPunishModal(message, cog))
+
 class QuickPunishCommandsMixin:
     @app_commands.command(name="快速处罚", description="通过消息链接打开快速处罚流程")
     @app_commands.describe(
@@ -464,6 +566,51 @@ class QuickPunishCommandsMixin:
             return
 
         await _send_quick_punish_modal(interaction, target_message, cog, mode.value)
+
+    @app_commands.command(name="预约送走-取消", description="取消自己尚未开始执行的全部预约送走")
+    @app_commands.guild_only()
+    async def scheduled_quick_punish_cancel(self, interaction: discord.Interaction) -> None:
+        await safe_defer(interaction)
+        if not self.enabled:
+            await interaction.followup.send("❌ 快速处罚功能未启用", ephemeral=True)
+            return
+        if not check_admin_or_trusted(interaction):
+            await interaction.followup.send("❌ 您没有权限使用此命令", ephemeral=True)
+            return
+
+        cancelled, skipped_running, residue_links = await self.cancel_scheduled_punishments(interaction.user.id)
+        parts = [f"已取消 {cancelled} 个尚未执行的预约。"]
+        if skipped_running:
+            parts.append(f"跳过 {skipped_running} 个正在执行的预约。")
+        if residue_links:
+            parts.append("以下留存消息删除失败：\n" + "\n".join(residue_links))
+        await interaction.followup.send("\n".join(parts), ephemeral=True)
+
+    @app_commands.command(name="预约送走-列表", description="查看当前全部预约送走")
+    @app_commands.guild_only()
+    async def scheduled_quick_punish_list(self, interaction: discord.Interaction) -> None:
+        await safe_defer(interaction)
+        if not self.enabled:
+            await interaction.followup.send("❌ 快速处罚功能未启用", ephemeral=True)
+            return
+        if not check_admin_or_trusted(interaction):
+            await interaction.followup.send("❌ 您没有权限使用此命令", ephemeral=True)
+            return
+        content = self.format_scheduled_punishments()
+        if not content:
+            await interaction.followup.send("📝 当前没有预约送走。", ephemeral=True)
+            return
+        if len(content) <= 4096:
+            await interaction.followup.send(
+                embed=discord.Embed(title="预约送走列表", description=content, color=discord.Color.blue()),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(content.encode("utf-8")), filename="scheduled_quick_punishments.txt"),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="快速处罚-查询", description="查询最近的快速处罚记录")
     @app_commands.describe(count="要查询的记录数量（默认3条，最多1000条）")

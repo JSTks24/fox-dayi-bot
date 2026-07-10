@@ -5,11 +5,12 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import aiofiles
 
 from cogs.shared.context_menus import remove_guild_scoped_context_menus
-from .commands import quick_punish_context, remote_quick_punish_context
+from .commands import quick_punish_context, remote_quick_punish_context, scheduled_quick_punish_context
 from paths import QUICK_PUNISH_SYNC_CONFIG_FILE, XIAOZUOWEN_DIR
 
 QUICK_PUNISH_SYNC_CONFIG_PATH = str(QUICK_PUNISH_SYNC_CONFIG_FILE)
@@ -20,6 +21,10 @@ class QuickPunishCoreMixin:
         self.bot = bot
         self._punish_locks: dict[int, asyncio.Lock] = {}
         self._punish_locks_guard = asyncio.Lock()
+        # ponytail: schedules live in memory; persist them only if restart loss becomes unacceptable.
+        self._scheduled_punishments: dict[int, dict[str, Any]] = {}
+        self._scheduling_message_ids: set[int] = set()
+        self._schedule_creation_tasks: set[asyncio.Task[Any]] = set()
 
         # 从环境变量加载配置
         self.enabled = os.getenv("QUICK_PUNISH_ENABLED", "false").lower() == "true"
@@ -44,9 +49,19 @@ class QuickPunishCoreMixin:
         await asyncio.to_thread(self.init_database)
 
     def cog_unload(self):
+        for task in getattr(self, "_schedule_creation_tasks", set()):
+            if not task.done():
+                task.cancel()
+        for schedule in getattr(self, "_scheduled_punishments", {}).values():
+            task = schedule.get("task")
+            if task and not task.done():
+                task.cancel()
+        self._scheduled_punishments.clear()
+        self._scheduling_message_ids.clear()
+        self._schedule_creation_tasks.clear()
         remove_guild_scoped_context_menus(
             self.bot.tree,
-            [quick_punish_context, remote_quick_punish_context],
+            [quick_punish_context, remote_quick_punish_context, scheduled_quick_punish_context],
         )
 
     def _parse_role_ids(self, role_str: str) -> list[int]:
@@ -362,14 +377,159 @@ class QuickPunishCoreMixin:
                 lines.append(f"❌ {item.get('guild_name')}：{item.get('error', '未知错误')}")
         return "\n".join(lines) if lines else "无执行结果"
 
-    async def execute_punishment(self, interaction: discord.Interaction,
+    async def schedule_punishment(
+        self,
+        *,
+        target_message: discord.Message,
+        trigger_guild: discord.Guild | None,
+        creator: discord.User,
+        reason: str,
+        dm_template_filename: str,
+        delay_seconds: int,
+    ) -> tuple[bool, str]:
+        if trigger_guild is None:
+            return False, "无法识别触发服务器"
+        if target_message.id in self._scheduled_punishments or target_message.id in self._scheduling_message_ids:
+            return False, "同一条原消息已有未结束的预约"
+
+        self._scheduling_message_ids.add(target_message.id)
+        creation_task = asyncio.current_task()
+        if creation_task is not None:
+            self._schedule_creation_tasks.add(creation_task)
+        created_at = datetime.now(timezone.utc)
+        schedule: dict[str, Any] = {
+            "original_message": target_message,
+            "target_user": target_message.author,
+            "trigger_guild": trigger_guild,
+            "creator": creator,
+            "reason": reason,
+            "dm_template_filename": dm_template_filename,
+            "created_at": created_at,
+            "execute_at": created_at + timedelta(seconds=delay_seconds),
+            "status": "pending",
+            "task": None,
+            "evidence": [],
+        }
+        try:
+            schedule["evidence"] = await self._create_scheduled_evidence(schedule)
+        finally:
+            self._scheduling_message_ids.discard(target_message.id)
+            if creation_task is not None:
+                self._schedule_creation_tasks.discard(creation_task)
+
+        if not schedule["evidence"]:
+            return False, "未配置留存目标或所有目标留存失败，未创建预约"
+
+        self._scheduled_punishments[target_message.id] = schedule
+        schedule["task"] = asyncio.create_task(
+            self._run_scheduled_punishment(target_message.id),
+            name=f"scheduled_quick_punish_{target_message.id}",
+        )
+        return True, f"已预约在 <t:{int(schedule['execute_at'].timestamp())}:F> 执行"
+
+    async def _run_scheduled_punishment(self, message_id: int) -> None:
+        schedule = self._scheduled_punishments.get(message_id)
+        if schedule is None:
+            return
+        try:
+            delay = max(0.0, (schedule["execute_at"] - datetime.now(timezone.utc)).total_seconds())
+            await asyncio.sleep(delay)
+            if self._scheduled_punishments.get(message_id) is not schedule:
+                return
+
+            schedule["status"] = "running"
+            await self._update_scheduled_evidence(schedule)
+            success, result, _history = await self.execute_punishment(
+                trigger_guild=schedule["trigger_guild"],
+                target_user=schedule["target_user"],
+                target_message=schedule["original_message"],
+                reason=schedule["reason"],
+                executor=schedule["creator"],
+                dm_template_filename=schedule["dm_template_filename"],
+                original_message_preserved=True,
+            )
+            schedule["status"] = "succeeded" if success else "failed"
+            await self._update_scheduled_evidence(
+                schedule,
+                executed_at=datetime.now(timezone.utc),
+                result=result,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            schedule["status"] = "failed"
+            await self._update_scheduled_evidence(
+                schedule,
+                executed_at=datetime.now(timezone.utc),
+                result=f"执行时发生错误：{error}",
+            )
+        finally:
+            if self._scheduled_punishments.get(message_id) is schedule:
+                self._scheduled_punishments.pop(message_id, None)
+
+    async def cancel_scheduled_punishments(self, creator_id: int) -> tuple[int, int, list[str]]:
+        pending_ids = [
+            message_id
+            for message_id, schedule in self._scheduled_punishments.items()
+            if schedule["creator"].id == creator_id and schedule["status"] == "pending"
+        ]
+        skipped_running = sum(
+            schedule["creator"].id == creator_id and schedule["status"] == "running"
+            for schedule in self._scheduled_punishments.values()
+        )
+        schedules = [self._scheduled_punishments.pop(message_id) for message_id in pending_ids]
+        residue_links: list[str] = []
+
+        for schedule in schedules:
+            task = schedule.get("task")
+            if task and not task.done():
+                task.cancel()
+            for status_message, snapshot_message in schedule["evidence"]:
+                for evidence_message in (status_message, snapshot_message):
+                    try:
+                        await evidence_message.delete()
+                    except discord.NotFound:
+                        pass
+                    except Exception as error:
+                        print(f"删除已取消预约的留存消息时出错: {type(error).__name__}: {error}")
+                        if jump_url := getattr(evidence_message, "jump_url", None):
+                            residue_links.append(jump_url)
+
+        return len(schedules), skipped_running, residue_links
+
+    def format_scheduled_punishments(self) -> str:
+        status_labels = {"pending": "计时中", "running": "正在执行"}
+        sections = []
+        for schedule in sorted(
+            (
+                schedule
+                for schedule in self._scheduled_punishments.values()
+                if schedule["status"] in status_labels
+            ),
+            key=lambda item: item["execute_at"],
+        ):
+            snapshot_url = "无"
+            if schedule["evidence"]:
+                snapshot_url = getattr(schedule["evidence"][0][1], "jump_url", "无")
+            execute_timestamp = int(schedule["execute_at"].timestamp())
+            sections.append(
+                f"创建者：{schedule['creator'].mention}\n"
+                f"目标用户：{schedule['target_user'].mention} ({schedule['target_user'].id})\n"
+                f"原消息：{schedule['original_message'].jump_url}\n"
+                f"快照：{snapshot_url}\n"
+                f"计划执行：<t:{execute_timestamp}:F> (<t:{execute_timestamp}:R>)\n"
+                f"状态：{status_labels[schedule['status']]}"
+            )
+        return "\n\n".join(sections)
+
+    async def execute_punishment(self, trigger_guild: discord.Guild | None,
                                 target_user: discord.User,
                                 target_message: discord.Message,
                                 reason: str,
                                 executor: discord.User,
-                                dm_template_filename: str | None = None) -> tuple[bool, str, list[dict]]:
+                                dm_template_filename: str | None = None,
+                                original_message_preserved: bool = False) -> tuple[bool, str, list[dict]]:
         """执行处罚的主要逻辑，返回(成功状态, 消息, 处罚历史)"""
-        trigger_guild = interaction.guild
         if trigger_guild is None:
             return False, "无法识别触发服务器", []
 
@@ -461,7 +621,7 @@ class QuickPunishCoreMixin:
                             record_id=record_id,
                             trigger_guild=trigger_guild,
                             sync_results=sync_results,
-                            original_message=target_message
+                            original_message=None if original_message_preserved else target_message
                         )
 
                 if self.interface_channel_id:

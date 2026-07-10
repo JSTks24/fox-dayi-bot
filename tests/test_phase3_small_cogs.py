@@ -196,6 +196,7 @@ class GuildScopedContextMenuTests(unittest.TestCase):
         commands = [
             quick_punish.quick_punish_context,
             quick_punish.remote_quick_punish_context,
+            quick_punish.scheduled_quick_punish_context,
             tagger.fox14_tag_context,
         ]
 
@@ -203,10 +204,10 @@ class GuildScopedContextMenuTests(unittest.TestCase):
             guild_ids = register_guild_scoped_context_menus(tree, commands, label="Test")
 
         self.assertEqual(guild_ids, [111, 222])
-        self.assertEqual(tree.add_command.call_count, 6)
+        self.assertEqual(tree.add_command.call_count, 8)
         self.assertEqual(
             [call.kwargs["guild"].id for call in tree.add_command.call_args_list],
-            [111, 111, 111, 222, 222, 222],
+            [111, 111, 111, 111, 222, 222, 222, 222],
         )
 
     def test_remove_guild_scoped_context_menus_removes_each_command_per_guild(self):
@@ -214,16 +215,17 @@ class GuildScopedContextMenuTests(unittest.TestCase):
         commands = [
             quick_punish.quick_punish_context,
             quick_punish.remote_quick_punish_context,
+            quick_punish.scheduled_quick_punish_context,
             tagger.fox14_tag_context,
         ]
 
         with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111,222"}, clear=False):
             remove_guild_scoped_context_menus(tree, commands)
 
-        self.assertEqual(tree.remove_command.call_count, 6)
+        self.assertEqual(tree.remove_command.call_count, 8)
         self.assertEqual(
             [call.kwargs["guild"].id for call in tree.remove_command.call_args_list],
-            [111, 111, 111, 222, 222, 222],
+            [111, 111, 111, 111, 222, 222, 222, 222],
         )
 
 

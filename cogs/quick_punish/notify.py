@@ -168,17 +168,122 @@ class QuickPunishNotifyMixin:
         self,
         channel: discord.abc.Messageable,
         message: discord.Message,
+        *,
+        send_warning: bool = True,
     ) -> discord.Message | None:
         """Create an immutable Discord snapshot of the punished message."""
         try:
             return await message.forward(channel)
         except Exception as e:
             print(f"创建原消息快照时出错: {type(e).__name__}: {e}")
+            if not send_warning:
+                return None
             try:
                 await channel.send("⚠️ 无法创建原消息快照；处罚日志已保留。")
             except Exception as warning_error:
                 print(f"发送原消息快照失败警告时出错: {type(warning_error).__name__}: {warning_error}")
             return None
+
+    def _build_scheduled_punishment_embed(
+        self,
+        schedule: dict[str, Any],
+        snapshot_message: discord.Message | None,
+        *,
+        executed_at: datetime | None = None,
+        result: str | None = None,
+    ) -> discord.Embed:
+        status_labels = {
+            "pending": "计时中",
+            "running": "正在执行",
+            "succeeded": "执行成功",
+            "failed": "执行失败",
+        }
+        embed = discord.Embed(
+            title="预约送走留存",
+            color=discord.Color.green() if schedule["status"] == "succeeded" else discord.Color.orange(),
+            timestamp=schedule["created_at"],
+        )
+        embed.add_field(
+            name="目标用户",
+            value=f"{schedule['target_user'].mention} ({schedule['target_user'].id})",
+            inline=False,
+        )
+        embed.add_field(name="创建者", value=schedule["creator"].mention, inline=True)
+        embed.add_field(name="原因", value=schedule["reason"], inline=True)
+        embed.add_field(name="原消息", value=f"[跳转]({schedule['original_message'].jump_url})", inline=False)
+        snapshot_link = getattr(snapshot_message, "jump_url", None)
+        embed.add_field(
+            name="快照",
+            value=f"[跳转]({snapshot_link})" if snapshot_link else "创建中",
+            inline=False,
+        )
+        created_timestamp = int(schedule["created_at"].timestamp())
+        execute_timestamp = int(schedule["execute_at"].timestamp())
+        embed.add_field(name="创建时间", value=f"<t:{created_timestamp}:F>", inline=True)
+        embed.add_field(
+            name="计划执行时间",
+            value=f"<t:{execute_timestamp}:F> (<t:{execute_timestamp}:R>)",
+            inline=True,
+        )
+        embed.add_field(name="当前状态", value=status_labels[schedule["status"]], inline=False)
+        if executed_at:
+            embed.add_field(name="实际执行时间", value=f"<t:{int(executed_at.timestamp())}:F>", inline=False)
+        if result:
+            embed.add_field(name="结果摘要", value=result[:1024], inline=False)
+        return embed
+
+    async def _create_scheduled_evidence(self, schedule: dict[str, Any]) -> list[tuple[discord.Message, discord.Message]]:
+        evidence: list[tuple[discord.Message, discord.Message]] = []
+        for destination in await self._get_log_destinations():
+            status_message = None
+            snapshot_message = None
+            try:
+                status_message = await destination.send(
+                    embed=self._build_scheduled_punishment_embed(schedule, None)
+                )
+                snapshot_message = await self._forward_original_message(
+                    destination,
+                    schedule["original_message"],
+                    send_warning=False,
+                )
+                if snapshot_message is None:
+                    raise RuntimeError("snapshot creation failed")
+                await status_message.edit(
+                    embed=self._build_scheduled_punishment_embed(schedule, snapshot_message)
+                )
+                evidence.append((status_message, snapshot_message))
+            except Exception as error:
+                print(f"创建预约送走留存时出错: {type(error).__name__}: {error}")
+                for partial_message in (status_message, snapshot_message):
+                    if partial_message is None:
+                        continue
+                    try:
+                        await partial_message.delete()
+                    except discord.NotFound:
+                        pass
+                    except Exception as cleanup_error:
+                        print(f"清理预约送走残留时出错: {type(cleanup_error).__name__}: {cleanup_error}")
+        return evidence
+
+    async def _update_scheduled_evidence(
+        self,
+        schedule: dict[str, Any],
+        *,
+        executed_at: datetime | None = None,
+        result: str | None = None,
+    ) -> None:
+        for status_message, snapshot_message in schedule["evidence"]:
+            try:
+                await status_message.edit(
+                    embed=self._build_scheduled_punishment_embed(
+                        schedule,
+                        snapshot_message,
+                        executed_at=executed_at,
+                        result=result,
+                    )
+                )
+            except Exception as error:
+                print(f"更新预约送走留存状态时出错: {type(error).__name__}: {error}")
 
     async def _build_dm_content(self, target_message: discord.Message | None,
                                reason: str, executor: discord.User,

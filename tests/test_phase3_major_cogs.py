@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 import unittest
 from pathlib import Path
@@ -56,6 +57,13 @@ class DummyResponse:
     def __init__(self):
         self.message = None
         self.modal = None
+        self.deferred = False
+
+    def is_done(self):
+        return self.deferred or self.message is not None or self.modal is not None
+
+    async def defer(self, ephemeral: bool = False):
+        self.deferred = ephemeral
 
     async def send_message(self, content: str, ephemeral: bool = False):
         self.message = (content, ephemeral)
@@ -65,9 +73,12 @@ class DummyResponse:
 
 
 class DummyClient:
-    def __init__(self, cog=None, channels=None):
+    def __init__(self, cog=None, channels=None, *, admins=None, trusted_users=None):
         self._cog = cog
         self._channels = {channel.id: channel for channel in channels or []}
+        self.admins = admins or []
+        self.owner_ids = []
+        self.trusted_users = trusted_users or []
 
     def get_cog(self, name: str):
         if name == "QuickPunishCog":
@@ -88,6 +99,7 @@ class DummyInteraction:
         self.client = client
         self.user = user or SimpleNamespace(id=99, roles=[])
         self.response = DummyResponse()
+        self.followup = SimpleNamespace(send=mock.AsyncMock())
 
 
 class DummyChannel:
@@ -178,6 +190,13 @@ class QuickPunishTests(unittest.TestCase):
     def test_cog_unload_removes_context_menus(self):
         cog = object.__new__(quick_punish.QuickPunishCog)
         cog.bot = DummyBot()
+        scheduled_task = SimpleNamespace(done=lambda: False, cancel=mock.Mock())
+        retained_message = SimpleNamespace(delete=mock.AsyncMock())
+        cog._scheduled_punishments = {
+            1: {"task": scheduled_task, "evidence": [(retained_message, retained_message)]},
+        }
+        cog._scheduling_message_ids = {2}
+        cog._schedule_creation_tasks = set()
 
         with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111"}, clear=False):
             cog.cog_unload()
@@ -187,8 +206,13 @@ class QuickPunishTests(unittest.TestCase):
             [
                 (quick_punish.quick_punish_context.name, quick_punish.quick_punish_context.type),
                 (quick_punish.remote_quick_punish_context.name, quick_punish.remote_quick_punish_context.type),
+                (quick_punish.scheduled_quick_punish_context.name, quick_punish.scheduled_quick_punish_context.type),
             ],
         )
+        scheduled_task.cancel.assert_called_once()
+        retained_message.delete.assert_not_awaited()
+        self.assertEqual(cog._scheduled_punishments, {})
+        self.assertEqual(cog._scheduling_message_ids, set())
 
     def test_log_embed_forwards_original_message_to_each_destination(self):
         cog = object.__new__(quick_punish.QuickPunishCog)
@@ -285,6 +309,16 @@ class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(quick_punish.commands._parse_quick_punish_message_link("not-a-link"))
 
+    def test_parse_scheduled_delay_accepts_only_confirmed_ranges(self):
+        self.assertEqual(quick_punish.commands.parse_scheduled_delay("1m"), 60)
+        self.assertEqual(quick_punish.commands.parse_scheduled_delay("120m"), 7200)
+        self.assertEqual(quick_punish.commands.parse_scheduled_delay("1h"), 3600)
+        self.assertEqual(quick_punish.commands.parse_scheduled_delay("2h"), 7200)
+
+        for invalid in ("0m", "121m", "3h", "1.5h", " 1m", "1m ", "1s", "1d", ""):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                quick_punish.commands.parse_scheduled_delay(invalid)
+
     async def test_resolve_message_from_link_rejects_cross_guild(self):
         guild = DummyGuild(guild_id=1)
         interaction = DummyInteraction(guild, DummyClient())
@@ -338,6 +372,336 @@ class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
         remote_interaction = DummyInteraction(guild, client)
         await quick_punish.remote_quick_punish_context.callback(remote_interaction, message)
         self.assertIsInstance(remote_interaction.response.modal, quick_punish.commands.RemoteQuickPunishModal)
+
+    async def test_scheduled_context_menu_allows_trusted_users_only(self):
+        cog = self._build_quick_punish_cog()
+        guild = DummyGuild(guild_id=1)
+        message = self._build_message(guild, DummyChannel(10, guild))
+
+        trusted = DummyInteraction(
+            guild,
+            DummyClient(cog=cog, trusted_users=[99]),
+            user=SimpleNamespace(id=99),
+        )
+        await quick_punish.scheduled_quick_punish_context.callback(trusted, message)
+        self.assertIsInstance(trusted.response.modal, quick_punish.commands.ScheduledQuickPunishModal)
+
+        ordinary = DummyInteraction(
+            guild,
+            DummyClient(cog=cog),
+            user=SimpleNamespace(id=99),
+        )
+        await quick_punish.scheduled_quick_punish_context.callback(ordinary, message)
+        self.assertIn("没权", ordinary.response.message[0])
+
+        admin = DummyInteraction(
+            guild,
+            DummyClient(cog=cog, admins=[99]),
+            user=SimpleNamespace(id=99),
+        )
+        await quick_punish.scheduled_quick_punish_context.callback(admin, message)
+        self.assertIsInstance(admin.response.modal, quick_punish.commands.ScheduledQuickPunishModal)
+
+    async def test_scheduled_modal_rechecks_permission_when_creating(self):
+        cog = self._build_quick_punish_cog()
+        cog.schedule_punishment = mock.AsyncMock()
+        guild = DummyGuild(guild_id=1)
+        message = self._build_message(guild, DummyChannel(10, guild))
+        interaction = DummyInteraction(
+            guild,
+            DummyClient(cog=cog, trusted_users=[99]),
+            user=SimpleNamespace(id=99),
+        )
+        await quick_punish.scheduled_quick_punish_context.callback(interaction, message)
+        modal = interaction.response.modal
+        interaction.client.trusted_users.clear()
+        modal.delay._value = "1m"
+        modal.reason._value = "测试"
+        modal.template_select._values = ["__none__"]
+
+        await modal.on_submit(interaction)
+
+        cog.schedule_punishment.assert_not_awaited()
+        self.assertIn("没权", interaction.followup.send.await_args.args[0])
+
+    async def test_cog_unload_cancels_evidence_creation_before_it_can_schedule(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog.bot = DummyBot()
+        cog._scheduled_punishments = {}
+        cog._scheduling_message_ids = set()
+        cog._schedule_creation_tasks = set()
+        started = asyncio.Event()
+
+        async def create_evidence(_schedule):
+            started.set()
+            await asyncio.Future()
+
+        cog._create_scheduled_evidence = create_evidence
+        creation_task = asyncio.create_task(
+            cog.schedule_punishment(
+                target_message=SimpleNamespace(
+                    id=777,
+                    author=SimpleNamespace(id=7),
+                ),
+                trigger_guild=SimpleNamespace(id=1),
+                creator=SimpleNamespace(id=9),
+                reason="测试",
+                dm_template_filename="default.txt",
+                delay_seconds=60,
+            )
+        )
+        await started.wait()
+
+        with mock.patch.dict(os.environ, {"BOT_SHOULD_IN_GUILD_IDS": "111"}, clear=False):
+            cog.cog_unload()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await creation_task
+        self.assertEqual(cog._scheduled_punishments, {})
+        self.assertEqual(cog._schedule_creation_tasks, set())
+
+    async def test_schedule_requires_complete_evidence_in_at_least_one_destination(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog._scheduled_punishments = {}
+        cog._scheduling_message_ids = set()
+        cog._schedule_creation_tasks = set()
+        status_message = SimpleNamespace(delete=mock.AsyncMock(), jump_url="https://discord.com/status")
+        destination = SimpleNamespace(send=mock.AsyncMock(return_value=status_message))
+        cog._get_log_destinations = mock.AsyncMock(return_value=[destination])
+        target_message = SimpleNamespace(
+            id=777,
+            jump_url="https://discord.com/original",
+            author=SimpleNamespace(id=7, mention="<@7>"),
+            forward=mock.AsyncMock(side_effect=RuntimeError("snapshot failed")),
+        )
+
+        success, message = await cog.schedule_punishment(
+            target_message=target_message,
+            trigger_guild=SimpleNamespace(id=1, name="Guild"),
+            creator=SimpleNamespace(id=9, mention="<@9>"),
+            reason="测试",
+            dm_template_filename="default.txt",
+            delay_seconds=60,
+        )
+
+        self.assertFalse(success)
+        self.assertIn("留存失败", message)
+        self.assertEqual(cog._scheduled_punishments, {})
+        status_message.delete.assert_awaited_once()
+
+    async def test_schedule_keeps_complete_destinations_and_rejects_duplicates(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog._scheduled_punishments = {}
+        cog._scheduling_message_ids = set()
+        cog._schedule_creation_tasks = set()
+        good_status = SimpleNamespace(
+            edit=mock.AsyncMock(),
+            delete=mock.AsyncMock(),
+            jump_url="https://discord.com/status-good",
+        )
+        failed_status = SimpleNamespace(
+            edit=mock.AsyncMock(),
+            delete=mock.AsyncMock(),
+            jump_url="https://discord.com/status-failed",
+        )
+        snapshot = SimpleNamespace(delete=mock.AsyncMock(), jump_url="https://discord.com/snapshot")
+        destinations = [
+            SimpleNamespace(send=mock.AsyncMock(return_value=good_status)),
+            SimpleNamespace(send=mock.AsyncMock(return_value=failed_status)),
+        ]
+        cog._get_log_destinations = mock.AsyncMock(return_value=destinations)
+
+        async def forward(destination):
+            if destination is destinations[0]:
+                return snapshot
+            raise RuntimeError("snapshot failed")
+
+        target_message = SimpleNamespace(
+            id=777,
+            jump_url="https://discord.com/original",
+            author=SimpleNamespace(id=7, mention="<@7>"),
+            forward=mock.AsyncMock(side_effect=forward),
+        )
+        creator = SimpleNamespace(id=9, mention="<@9>")
+        guild = SimpleNamespace(id=1, name="Guild")
+
+        success, _message = await cog.schedule_punishment(
+            target_message=target_message,
+            trigger_guild=guild,
+            creator=creator,
+            reason="测试",
+            dm_template_filename="default.txt",
+            delay_seconds=7200,
+        )
+        duplicate_success, duplicate_message = await cog.schedule_punishment(
+            target_message=target_message,
+            trigger_guild=guild,
+            creator=creator,
+            reason="测试",
+            dm_template_filename="default.txt",
+            delay_seconds=7200,
+        )
+
+        self.assertTrue(success)
+        self.assertFalse(duplicate_success)
+        self.assertIn("已有未结束的预约", duplicate_message)
+        self.assertEqual(len(cog._scheduled_punishments), 1)
+        self.assertEqual(cog._scheduled_punishments[777]["evidence"], [(good_status, snapshot)])
+        good_status.edit.assert_awaited_once()
+        self.assertIn("计时中", str(good_status.edit.await_args.kwargs["embed"].to_dict()))
+        self.assertIn(snapshot.jump_url, str(good_status.edit.await_args.kwargs["embed"].to_dict()))
+        failed_status.delete.assert_awaited_once()
+        self.assertEqual(target_message.forward.await_count, 2)
+
+        task = cog._scheduled_punishments.pop(777)["task"]
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+    async def test_due_schedule_executes_saved_message_and_records_terminal_state(self):
+        for success in (True, False):
+            with self.subTest(success=success):
+                cog = object.__new__(quick_punish.QuickPunishCog)
+                status_message = SimpleNamespace(edit=mock.AsyncMock(), delete=mock.AsyncMock())
+                snapshot = SimpleNamespace(jump_url="https://discord.com/snapshot", delete=mock.AsyncMock())
+                target_message = SimpleNamespace(
+                    id=777,
+                    jump_url="https://discord.com/original",
+                    channel=SimpleNamespace(fetch_message=mock.AsyncMock(side_effect=AssertionError("must not refetch"))),
+                )
+                creator = SimpleNamespace(id=9, mention="<@9>")
+                target_user = SimpleNamespace(id=7, mention="<@7>")
+                guild = SimpleNamespace(id=1, name="Guild")
+                schedule = {
+                    "original_message": target_message,
+                    "target_user": target_user,
+                    "trigger_guild": guild,
+                    "creator": creator,
+                    "reason": "测试",
+                    "dm_template_filename": "default.txt",
+                    "created_at": datetime.now(timezone.utc) - timedelta(minutes=1),
+                    "execute_at": datetime.now(timezone.utc) - timedelta(seconds=1),
+                    "status": "pending",
+                    "task": None,
+                    "evidence": [(status_message, snapshot)],
+                }
+                cog._scheduled_punishments = {777: schedule}
+                cog.execute_punishment = mock.AsyncMock(return_value=(success, "执行结果", []))
+
+                await cog._run_scheduled_punishment(777)
+
+                cog.execute_punishment.assert_awaited_once_with(
+                    trigger_guild=guild,
+                    target_user=target_user,
+                    target_message=target_message,
+                    reason="测试",
+                    executor=creator,
+                    dm_template_filename="default.txt",
+                    original_message_preserved=True,
+                )
+                target_message.channel.fetch_message.assert_not_awaited()
+                self.assertEqual(status_message.edit.await_count, 2)
+                final_embed = status_message.edit.await_args.kwargs["embed"]
+                self.assertIn("执行成功" if success else "执行失败", str(final_embed.to_dict()))
+                self.assertIn("执行结果", str(final_embed.to_dict()))
+                snapshot.delete.assert_not_awaited()
+                self.assertNotIn(777, cog._scheduled_punishments)
+
+    async def test_cancel_removes_only_creators_pending_schedules_and_reports_residue(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        own_task = SimpleNamespace(done=lambda: False, cancel=mock.Mock())
+        other_task = SimpleNamespace(done=lambda: False, cancel=mock.Mock())
+        running_task = SimpleNamespace(done=lambda: False, cancel=mock.Mock())
+        deleted_status = SimpleNamespace(delete=mock.AsyncMock(), jump_url="https://discord.com/status")
+        failed_snapshot = SimpleNamespace(
+            delete=mock.AsyncMock(side_effect=RuntimeError("delete failed")),
+            jump_url="https://discord.com/residue",
+        )
+        cog._scheduled_punishments = {
+            1: {
+                "creator": SimpleNamespace(id=9),
+                "status": "pending",
+                "task": own_task,
+                "evidence": [(deleted_status, failed_snapshot)],
+            },
+            2: {
+                "creator": SimpleNamespace(id=10),
+                "status": "pending",
+                "task": other_task,
+                "evidence": [],
+            },
+            3: {
+                "creator": SimpleNamespace(id=9),
+                "status": "running",
+                "task": running_task,
+                "evidence": [],
+            },
+        }
+
+        cancelled, skipped_running, residue = await cog.cancel_scheduled_punishments(9)
+
+        self.assertEqual((cancelled, skipped_running), (1, 1))
+        self.assertEqual(residue, ["https://discord.com/residue"])
+        self.assertEqual(set(cog._scheduled_punishments), {2, 3})
+        own_task.cancel.assert_called_once()
+        other_task.cancel.assert_not_called()
+        running_task.cancel.assert_not_called()
+        deleted_status.delete.assert_awaited_once()
+        failed_snapshot.delete.assert_awaited_once()
+
+    def test_schedule_list_contains_all_creators_sorted_by_execution_time(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        now = datetime.now(timezone.utc)
+
+        def schedule(message_id, creator_id, execute_at, status):
+            return {
+                "creator": SimpleNamespace(id=creator_id, mention=f"<@{creator_id}>"),
+                "target_user": SimpleNamespace(id=message_id, mention=f"<@{message_id}>"),
+                "original_message": SimpleNamespace(jump_url=f"https://discord.com/original/{message_id}"),
+                "execute_at": execute_at,
+                "status": status,
+                "evidence": [
+                    (SimpleNamespace(), SimpleNamespace(jump_url=f"https://discord.com/snapshot/{message_id}"))
+                ],
+            }
+
+        cog._scheduled_punishments = {
+            2: schedule(2, 20, now + timedelta(minutes=2), "running"),
+            1: schedule(1, 10, now + timedelta(minutes=1), "pending"),
+            3: schedule(3, 30, now, "succeeded"),
+        }
+
+        result = cog.format_scheduled_punishments()
+
+        self.assertLess(result.index("<@10>"), result.index("<@20>"))
+        self.assertIn("计时中", result)
+        self.assertIn("正在执行", result)
+        self.assertIn("https://discord.com/original/1", result)
+        self.assertIn("https://discord.com/snapshot/2", result)
+        self.assertNotIn("<@30>", result)
+
+    async def test_schedule_management_commands_allow_admins_and_trusted_users(self):
+        cog = object.__new__(quick_punish.QuickPunishCog)
+        cog.enabled = True
+        cog._scheduled_punishments = {}
+        cog.cancel_scheduled_punishments = mock.AsyncMock(return_value=(0, 0, []))
+        guild = DummyGuild(guild_id=1)
+
+        trusted = DummyInteraction(
+            guild,
+            DummyClient(cog=cog, trusted_users=[99]),
+            user=SimpleNamespace(id=99),
+        )
+        await quick_punish.QuickPunishCommandsMixin.scheduled_quick_punish_cancel.callback(cog, trusted)
+        cog.cancel_scheduled_punishments.assert_awaited_once_with(99)
+
+        admin = DummyInteraction(
+            guild,
+            DummyClient(cog=cog, admins=[99]),
+            user=SimpleNamespace(id=99),
+        )
+        await quick_punish.QuickPunishCommandsMixin.scheduled_quick_punish_list.callback(cog, admin)
+        self.assertIn("当前没有预约", admin.followup.send.await_args.args[0])
 
     async def test_slash_quick_punish_opens_remote_modal_from_message_link(self):
         cog = self._build_quick_punish_cog()
