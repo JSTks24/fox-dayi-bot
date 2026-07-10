@@ -109,3 +109,4 @@ developer/
 deprecated/
 !cogs/deprecated/
 !cogs/deprecated/*.py
+.drift-cache/
