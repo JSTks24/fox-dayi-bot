@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from cogs.appdayi import AppDayi
+from cogs.appdayi.stream import MAX_IMAGE_ATTACHMENTS
 from cogs.summary import SUMMARY_TIMEOUT_SECONDS, Summary
 
 
@@ -30,6 +31,13 @@ class AppDayiPhase3Tests(unittest.TestCase):
     def setUp(self):
         self.cog = AppDayi(DummyBot())
 
+    def _make_image_attachment(self, index: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            content_type="image/png",
+            filename=f"image_{index}.png",
+            size=1024,
+        )
+
     def test_quick_dayi_no_longer_blocks_target_user_with_banlist(self):
         bot = DummyBot()
         bot.trusted_users = [7]
@@ -39,12 +47,17 @@ class AppDayiPhase3Tests(unittest.TestCase):
         send_public_error = mock.AsyncMock()
         cog._send_public_error = send_public_error
 
-        with mock.patch("cogs.appdayi.core.safe_defer", new=mock.AsyncMock()):
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_MODEL": "test-model"}, clear=False),
+            mock.patch("cogs.appdayi.core.safe_defer", new=mock.AsyncMock()),
+        ):
             asyncio.run(cog.quick_dayi(interaction, message))
 
         send_public_error.assert_awaited_once()
-        self.assertEqual(send_public_error.await_args.args[1], message)
-        self.assertIn("AI 服务尚未正确初始化", send_public_error.await_args.args[2])
+        error_call = send_public_error.await_args
+        assert error_call is not None
+        self.assertEqual(error_call.args[1], message)
+        self.assertIn("AI 服务尚未正确初始化", error_call.args[2])
 
     def test_default_prompt_cache_refreshes_when_mtime_changes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -101,6 +114,54 @@ class AppDayiPhase3Tests(unittest.TestCase):
                 [f"archive_{index}.txt" for index in range(2, 7)],
             )
             self.assertTrue(os.path.exists(keep_file))
+
+    def test_quick_dayi_allows_five_images_before_service_check(self):
+        bot = DummyBot()
+        bot.trusted_users = [7]
+        cog = AppDayi(bot)
+        interaction = SimpleNamespace(user=SimpleNamespace(id=7))
+        message = SimpleNamespace(
+            id=99,
+            author=SimpleNamespace(id=42, name="target"),
+            attachments=[self._make_image_attachment(index) for index in range(MAX_IMAGE_ATTACHMENTS)],
+        )
+        send_public_error = mock.AsyncMock()
+        cog._send_public_error = send_public_error
+
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_MODEL": "test-model"}, clear=False),
+            mock.patch("cogs.appdayi.core.safe_defer", new=mock.AsyncMock()),
+        ):
+            asyncio.run(cog.quick_dayi(interaction, message))
+
+        send_public_error.assert_awaited_once()
+        error_call = send_public_error.await_args
+        assert error_call is not None
+        self.assertIn("AI 服务尚未正确初始化", error_call.args[2])
+
+    def test_quick_dayi_blocks_more_than_five_images(self):
+        bot = DummyBot()
+        bot.trusted_users = [7]
+        cog = AppDayi(bot)
+        interaction = SimpleNamespace(user=SimpleNamespace(id=7))
+        message = SimpleNamespace(
+            id=99,
+            author=SimpleNamespace(id=42, name="target"),
+            attachments=[self._make_image_attachment(index) for index in range(MAX_IMAGE_ATTACHMENTS + 1)],
+        )
+        send_public_error = mock.AsyncMock()
+        cog._send_public_error = send_public_error
+
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_MODEL": "test-model"}, clear=False),
+            mock.patch("cogs.appdayi.core.safe_defer", new=mock.AsyncMock()),
+        ):
+            asyncio.run(cog.quick_dayi(interaction, message))
+
+        send_public_error.assert_awaited_once()
+        error_call = send_public_error.await_args
+        assert error_call is not None
+        self.assertIn(f"系统最多支持 {MAX_IMAGE_ATTACHMENTS} 张图片", error_call.args[2])
 
 
 class SummaryPhase3Tests(unittest.TestCase):
