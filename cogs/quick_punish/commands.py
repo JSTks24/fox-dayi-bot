@@ -314,7 +314,7 @@ class ScheduledQuickPunishModal(discord.ui.Modal):
         self.add_item(discord.ui.Label(text="延迟时间", description="允许 1m-120m 或 1h-2h", component=self.delay))
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        await safe_defer(interaction)
+        await safe_defer(interaction, ephemeral=False)
         if error_message := _scheduled_punish_validation_error(interaction, self.target_message, self.cog):
             await interaction.followup.send(error_message, ephemeral=True)
             return
@@ -340,7 +340,7 @@ class ScheduledQuickPunishModal(discord.ui.Modal):
                 operator=interaction.user,
                 execution_notice=message,
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, ephemeral=False)
             return
         await interaction.followup.send("❌ " + message, ephemeral=True)
 

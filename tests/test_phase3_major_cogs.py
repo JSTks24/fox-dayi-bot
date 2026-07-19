@@ -515,11 +515,17 @@ class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
         modal.reason._value = "测试"
         modal.template_select._values = ["__none__"]
 
-        await modal.on_submit(interaction)
+        with mock.patch.object(
+            quick_punish.commands,
+            "safe_defer",
+            new=mock.AsyncMock(),
+        ) as defer:
+            await modal.on_submit(interaction)
 
         send_kwargs = interaction.followup.send.await_args.kwargs
         embed = send_kwargs["embed"]
-        self.assertTrue(send_kwargs["ephemeral"])
+        defer.assert_awaited_once_with(interaction, ephemeral=False)
+        self.assertFalse(send_kwargs["ephemeral"])
         self.assertEqual(embed.title, "预约成功")
         self.assertIn("<@123456> 被 <@99> 执行了预约送走", embed.description)
         self.assertIn("<t:1893456000:F>", embed.description)
