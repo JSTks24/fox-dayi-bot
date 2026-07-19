@@ -42,6 +42,8 @@ def _scheduled_punish_validation_error(
         return "❌ 没权。只有管理员和 trusted_user 可以预约送走。"
     if message.author.bot:
         return "❌ 不能对Bot使用这个命令。"
+    if cog.has_active_scheduled_punishment(message.author.id):
+        return "❌ 该用户已有倒计时中的预约送走，不能再次预约或提前执行处罚。"
     return None
 
 
@@ -332,7 +334,15 @@ class ScheduledQuickPunishModal(discord.ui.Modal):
             dm_template_filename=chosen_template,
             delay_seconds=delay_seconds,
         )
-        await interaction.followup.send(("✅ " if success else "❌ ") + message, ephemeral=True)
+        if success:
+            embed = self.cog.build_scheduled_punishment_created_embed(
+                target_user=self.target_message.author,
+                operator=interaction.user,
+                execution_notice=message,
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        await interaction.followup.send("❌ " + message, ephemeral=True)
 
 
 async def _send_quick_punish_modal(
@@ -513,6 +523,13 @@ async def _validate_quick_punish_context(interaction: discord.Interaction,
 
     if message.author.bot:
         await interaction.response.send_message("❌ 不能对Bot使用这个命令。", ephemeral=True)
+        return None
+
+    if cog.has_active_scheduled_punishment(message.author.id):
+        await interaction.response.send_message(
+            "❌ 该用户已有倒计时中的预约送走，不能提前执行处罚。",
+            ephemeral=True,
+        )
         return None
 
     return cog

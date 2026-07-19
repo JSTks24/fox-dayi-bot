@@ -24,6 +24,7 @@ class QuickPunishCoreMixin:
         # ponytail: schedules live in memory; persist them only if restart loss becomes unacceptable.
         self._scheduled_punishments: dict[int, dict[str, Any]] = {}
         self._scheduling_message_ids: set[int] = set()
+        self._scheduling_user_ids: set[int] = set()
         self._schedule_creation_tasks: set[asyncio.Task[Any]] = set()
 
         # 从环境变量加载配置
@@ -58,6 +59,7 @@ class QuickPunishCoreMixin:
                 task.cancel()
         self._scheduled_punishments.clear()
         self._scheduling_message_ids.clear()
+        self._scheduling_user_ids.clear()
         self._schedule_creation_tasks.clear()
         remove_guild_scoped_context_menus(
             self.bot.tree,
@@ -188,9 +190,21 @@ class QuickPunishCoreMixin:
             self._punish_locks[user_id] = lock
         return lock
 
+    def has_active_scheduled_punishment(self, user_id: int) -> bool:
+        """Return whether a target is being scheduled, counting down, or executing."""
+        if user_id in getattr(self, "_scheduling_user_ids", set()):
+            return True
+        return any(
+            schedule.get("status") in {"pending", "running"}
+            and getattr(schedule.get("target_user"), "id", None) == user_id
+            for schedule in getattr(self, "_scheduled_punishments", {}).values()
+        )
+
     @asynccontextmanager
-    async def _punish_execution_lock(self, user_id: int):
+    async def _punish_execution_lock(self, user_id: int, *, scheduled_execution: bool = False):
         async with self._punish_locks_guard:
+            if not scheduled_execution and self.has_active_scheduled_punishment(user_id):
+                raise RuntimeError("scheduled_punishment_active")
             punish_lock = self._get_punish_lock(user_id)
             if punish_lock.locked():
                 raise RuntimeError("punish_lock_busy")
@@ -214,6 +228,7 @@ class QuickPunishCoreMixin:
     def _is_duplicate_punishment_message(self, message: str) -> bool:
         duplicate_markers = (
             "正在被其他管理员处理",
+            "已有倒计时中的预约送走",
             "先一步处罚",
             "不会重复执行",
             "已不再拥有可移除的处罚身份组"
@@ -389,10 +404,17 @@ class QuickPunishCoreMixin:
     ) -> tuple[bool, str]:
         if trigger_guild is None:
             return False, "无法识别触发服务器"
+        target_user_id = target_message.author.id
+        if self.has_active_scheduled_punishment(target_user_id):
+            return False, "该用户已有未结束的预约送走，不能再次预约或提前执行处罚"
         if target_message.id in self._scheduled_punishments or target_message.id in self._scheduling_message_ids:
             return False, "同一条原消息已有未结束的预约"
+        punish_lock = getattr(self, "_punish_locks", {}).get(target_user_id)
+        if punish_lock is not None and punish_lock.locked():
+            return False, "该用户正在被其他管理员处理，暂时不能创建预约送走"
 
         self._scheduling_message_ids.add(target_message.id)
+        self._scheduling_user_ids.add(target_user_id)
         creation_task = asyncio.current_task()
         if creation_task is not None:
             self._schedule_creation_tasks.add(creation_task)
@@ -412,20 +434,20 @@ class QuickPunishCoreMixin:
         }
         try:
             schedule["evidence"] = await self._create_scheduled_evidence(schedule)
+            if not schedule["evidence"]:
+                return False, "未配置留存目标或所有目标留存失败，未创建预约"
+
+            self._scheduled_punishments[target_message.id] = schedule
+            schedule["task"] = asyncio.create_task(
+                self._run_scheduled_punishment(target_message.id),
+                name=f"scheduled_quick_punish_{target_message.id}",
+            )
+            return True, f"将在 <t:{int(schedule['execute_at'].timestamp())}:F> 执行"
         finally:
             self._scheduling_message_ids.discard(target_message.id)
+            self._scheduling_user_ids.discard(target_user_id)
             if creation_task is not None:
                 self._schedule_creation_tasks.discard(creation_task)
-
-        if not schedule["evidence"]:
-            return False, "未配置留存目标或所有目标留存失败，未创建预约"
-
-        self._scheduled_punishments[target_message.id] = schedule
-        schedule["task"] = asyncio.create_task(
-            self._run_scheduled_punishment(target_message.id),
-            name=f"scheduled_quick_punish_{target_message.id}",
-        )
-        return True, f"已预约在 <t:{int(schedule['execute_at'].timestamp())}:F> 执行"
 
     async def _run_scheduled_punishment(self, message_id: int) -> None:
         schedule = self._scheduled_punishments.get(message_id)
@@ -447,6 +469,7 @@ class QuickPunishCoreMixin:
                 executor=schedule["creator"],
                 dm_template_filename=schedule["dm_template_filename"],
                 original_message_preserved=True,
+                scheduled_execution=True,
             )
             schedule["status"] = "succeeded" if success else "failed"
             await self._update_scheduled_evidence(
@@ -528,13 +551,17 @@ class QuickPunishCoreMixin:
                                 reason: str,
                                 executor: discord.User,
                                 dm_template_filename: str | None = None,
-                                original_message_preserved: bool = False) -> tuple[bool, str, list[dict]]:
+                                original_message_preserved: bool = False,
+                                scheduled_execution: bool = False) -> tuple[bool, str, list[dict]]:
         """执行处罚的主要逻辑，返回(成功状态, 消息, 处罚历史)"""
         if trigger_guild is None:
             return False, "无法识别触发服务器", []
 
         try:
-            async with self._punish_execution_lock(target_user.id):
+            async with self._punish_execution_lock(
+                target_user.id,
+                scheduled_execution=scheduled_execution,
+            ):
                 sync_guild_ids = self._get_sync_guild_ids(trigger_guild.id)
                 sync_results = list(await asyncio.gather(*[
                     self._execute_role_removal_in_guild(
@@ -641,6 +668,11 @@ class QuickPunishCoreMixin:
 
                 return True, success_msg, punishment_history
         except RuntimeError as e:
+            if str(e) == "scheduled_punishment_active":
+                return False, (
+                    f"用户 {target_user.mention} 已有倒计时中的预约送走。\n"
+                    "为避免提前执行或重复处罚，本次操作已被拦截。"
+                ), []
             if str(e) != "punish_lock_busy":
                 raise
             return False, (

@@ -96,6 +96,26 @@ class QuickPunishNotifyMixin:
         embed.set_footer(text=f"操作人: {operator.name}")
         return embed
 
+    def build_scheduled_punishment_created_embed(
+        self,
+        *,
+        target_user: discord.abc.User,
+        operator: discord.abc.User,
+        execution_notice: str,
+    ) -> discord.Embed:
+        """Build the immediate confirmation shown after a schedule is created."""
+        embed = discord.Embed(
+            title="预约成功",
+            description=(
+                f"{target_user.mention} 被 {operator.mention} 执行了预约送走，"
+                f"{execution_notice}。"
+            ),
+            color=discord.Color.green(),
+            timestamp=datetime.now(),
+        )
+        embed.set_footer(text="若要取消，请由预约操作员使用 /预约送走-取消。")
+        return embed
+
     async def send_dm(self, user: discord.User, message_content: str) -> bool:
         """发送私信给用户"""
         try:
