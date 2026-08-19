@@ -444,48 +444,48 @@ class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("已有倒计时中的预约送走", slash_interaction.response.message[0])
         self.assertIsNone(slash_interaction.response.modal)
 
-    async def test_scheduled_context_menu_allows_trusted_users_only(self):
+    async def test_scheduled_context_menu_uses_role_based_permission(self):
         cog = self._build_quick_punish_cog()
         guild = DummyGuild(guild_id=1)
         message = self._build_message(guild, DummyChannel(10, guild))
 
-        trusted = DummyInteraction(
-            guild,
-            DummyClient(cog=cog, trusted_users=[99]),
-            user=SimpleNamespace(id=99),
-        )
-        await quick_punish.scheduled_quick_punish_context.callback(trusted, message)
-        self.assertIsInstance(trusted.response.modal, quick_punish.commands.ScheduledQuickPunishModal)
-
-        ordinary = DummyInteraction(
+        allowed = DummyInteraction(
             guild,
             DummyClient(cog=cog),
             user=SimpleNamespace(id=99),
         )
-        await quick_punish.scheduled_quick_punish_context.callback(ordinary, message)
-        self.assertIn("没权", ordinary.response.message[0])
+        await quick_punish.scheduled_quick_punish_context.callback(allowed, message)
+        self.assertIsInstance(allowed.response.modal, quick_punish.commands.ScheduledQuickPunishModal)
 
-        admin = DummyInteraction(
+        cog.has_permission = lambda interaction: False
+        denied = DummyInteraction(
             guild,
-            DummyClient(cog=cog, admins=[99]),
+            DummyClient(cog=cog),
             user=SimpleNamespace(id=99),
         )
-        await quick_punish.scheduled_quick_punish_context.callback(admin, message)
-        self.assertIsInstance(admin.response.modal, quick_punish.commands.ScheduledQuickPunishModal)
+        await quick_punish.scheduled_quick_punish_context.callback(denied, message)
+        self.assertIn("没权", denied.response.message[0])
 
     async def test_scheduled_modal_rechecks_permission_when_creating(self):
         cog = self._build_quick_punish_cog()
         cog.schedule_punishment = mock.AsyncMock()
         guild = DummyGuild(guild_id=1)
         message = self._build_message(guild, DummyChannel(10, guild))
+
+        permission_calls: list[bool] = []
+
+        def permission_once(_interaction):
+            permission_calls.append(True)
+            return len(permission_calls) == 1
+
+        cog.has_permission = permission_once
         interaction = DummyInteraction(
             guild,
-            DummyClient(cog=cog, trusted_users=[99]),
+            DummyClient(cog=cog),
             user=SimpleNamespace(id=99),
         )
         await quick_punish.scheduled_quick_punish_context.callback(interaction, message)
         modal = interaction.response.modal
-        interaction.client.trusted_users.clear()
         modal.delay._value = "1m"
         modal.reason._value = "测试"
         modal.template_select._values = ["__none__"]
@@ -825,28 +825,39 @@ class QuickPunishCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("https://discord.com/snapshot/2", result)
         self.assertNotIn("<@30>", result)
 
-    async def test_schedule_management_commands_allow_admins_and_trusted_users(self):
+    async def test_schedule_management_commands_use_role_based_permission(self):
         cog = object.__new__(quick_punish.QuickPunishCog)
         cog.enabled = True
+        cog.has_permission = lambda interaction: True
         cog._scheduled_punishments = {}
         cog.cancel_scheduled_punishments = mock.AsyncMock(return_value=(0, 0, []))
         guild = DummyGuild(guild_id=1)
 
-        trusted = DummyInteraction(
+        operator = DummyInteraction(
             guild,
-            DummyClient(cog=cog, trusted_users=[99]),
+            DummyClient(cog=cog),
             user=SimpleNamespace(id=99),
         )
-        await quick_punish.QuickPunishCommandsMixin.scheduled_quick_punish_cancel.callback(cog, trusted)
+        await quick_punish.QuickPunishCommandsMixin.scheduled_quick_punish_cancel.callback(cog, operator)
         cog.cancel_scheduled_punishments.assert_awaited_once_with(99)
 
-        admin = DummyInteraction(
+        reviewer = DummyInteraction(
             guild,
-            DummyClient(cog=cog, admins=[99]),
+            DummyClient(cog=cog),
             user=SimpleNamespace(id=99),
         )
-        await quick_punish.QuickPunishCommandsMixin.scheduled_quick_punish_list.callback(cog, admin)
-        self.assertIn("当前没有预约", admin.followup.send.await_args.args[0])
+        await quick_punish.QuickPunishCommandsMixin.scheduled_quick_punish_list.callback(cog, reviewer)
+        self.assertIn("当前没有预约", reviewer.followup.send.await_args.args[0])
+
+        cog.has_permission = lambda interaction: False
+        denied = DummyInteraction(
+            guild,
+            DummyClient(cog=cog),
+            user=SimpleNamespace(id=99),
+        )
+        await quick_punish.QuickPunishCommandsMixin.scheduled_quick_punish_cancel.callback(cog, denied)
+        cog.cancel_scheduled_punishments.assert_awaited_once_with(99)
+        self.assertIn("没有权限", denied.followup.send.await_args.args[0])
 
     async def test_query_resolves_user_selector_and_user_id_with_id_precedence(self):
         cog = object.__new__(quick_punish.QuickPunishCog)

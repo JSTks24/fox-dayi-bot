@@ -7,7 +7,6 @@ import re
 from typing import Any
 import io
 from cogs.shared.interactions import safe_defer
-from cogs.shared.permissions import check_admin_or_trusted
 
 
 _QUICK_PUNISH_MESSAGE_LINK_RE = re.compile(
@@ -34,12 +33,13 @@ def _scheduled_punish_validation_error(
     message: discord.Message,
     cog: Any,
 ) -> str | None:
+    """Validate a scheduled punish request using the cog's role-based permission gate."""
     if not cog.enabled:
         return "❌ 预约送走功能未启用，请联系机器人开发者。"
     if interaction.guild is None:
         return "❌ 该命令只能在服务器内使用。"
-    if not check_admin_or_trusted(interaction):
-        return "❌ 没权。只有管理员和 trusted_user 可以预约送走。"
+    if not cog.has_permission(interaction):
+        return "❌ 没权。只有管理组和类脑自研答疑AI可以预约送走。"
     if message.author.bot:
         return "❌ 不能对Bot使用这个命令。"
     if cog.has_active_scheduled_punishment(message.author.id):
@@ -563,8 +563,23 @@ async def scheduled_quick_punish_context(interaction: discord.Interaction, messa
     if not cog:
         await interaction.response.send_message("❌ 模块未加载", ephemeral=True)
         return
-    if error_message := _scheduled_punish_validation_error(interaction, message, cog):
-        await interaction.response.send_message(error_message, ephemeral=True)
+    if not cog.enabled:
+        await interaction.response.send_message("❌ 预约送走功能未启用，请联系机器人开发者。", ephemeral=True)
+        return
+    if not cog.has_permission(interaction):
+        await interaction.response.send_message(
+            "❌ 没权。只有管理组和类脑自研答疑AI可以给人预约送走。",
+            ephemeral=True,
+        )
+        return
+    if message.author.bot:
+        await interaction.response.send_message("❌ 不能对Bot使用这个命令。", ephemeral=True)
+        return
+    if cog.has_active_scheduled_punishment(message.author.id):
+        await interaction.response.send_message(
+            "❌ 该用户已有倒计时中的预约送走，不能提前执行处罚。",
+            ephemeral=True,
+        )
         return
 
     await interaction.response.send_modal(ScheduledQuickPunishModal(message, cog))
@@ -610,7 +625,7 @@ class QuickPunishCommandsMixin:
         if not self.enabled:
             await interaction.followup.send("❌ 快速处罚功能未启用", ephemeral=True)
             return
-        if not check_admin_or_trusted(interaction):
+        if not self.has_permission(interaction):
             await interaction.followup.send("❌ 您没有权限使用此命令", ephemeral=True)
             return
 
@@ -629,7 +644,7 @@ class QuickPunishCommandsMixin:
         if not self.enabled:
             await interaction.followup.send("❌ 快速处罚功能未启用", ephemeral=True)
             return
-        if not check_admin_or_trusted(interaction):
+        if not self.has_permission(interaction):
             await interaction.followup.send("❌ 您没有权限使用此命令", ephemeral=True)
             return
         content = self.format_scheduled_punishments()
