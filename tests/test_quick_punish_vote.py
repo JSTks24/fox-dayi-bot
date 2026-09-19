@@ -109,11 +109,12 @@ class PunishVoteTestBase(unittest.TestCase):
     async def seed_vote(self, cog, *, record_id: int = 1, executor_id: str = "2",
                         approver_ids: list[str] | None = None,
                         rejecter_ids: list[str] | None = None,
-                        vote_message_id: int = PANEL_MESSAGE_ID):
+                        vote_message_id: int = PANEL_MESSAGE_ID,
+                        target_message_link: str = TARGET_MESSAGE_LINK):
         await cog.create_vote(
             record_id=record_id,
             vote_message_id=str(vote_message_id),
-            target_message_link=TARGET_MESSAGE_LINK,
+            target_message_link=target_message_link,
             target_user_id="42",
             executor_id=executor_id,
             reason="刷屏",
@@ -439,6 +440,43 @@ class PunishVoteClickTests(PunishVoteTestBase):
             kwargs = interaction.edit_original_response.await_args.kwargs
             result_field = next(f for f in kwargs["embed"].fields if f.name == "投票结果")
             self.assertIn("原消息已不存在", result_field.value)
+
+    def test_deletion_forbidden_marks_delete_failed(self):
+        with self.click_env() as (cog, target):
+            target.delete.side_effect = discord.Forbidden(
+                SimpleNamespace(status=403, reason="Forbidden"), "missing"
+            )
+
+            async def _scenario():
+                await self.seed_vote(cog, approver_ids=["100"])
+                interaction = DummyVoteInteraction(make_member(101, [VOTE_ROLE_ID]))
+                await cog.handle_vote_click(interaction, "approve")
+                return await cog.get_vote_by_record_id(1), interaction
+
+            vote, interaction = asyncio.run(_scenario())
+            self.assertEqual(vote["status"], "delete_failed")
+            kwargs = interaction.edit_original_response.await_args.kwargs
+            self.assertIsNone(kwargs["view"])
+            self.assertEqual(kwargs["embed"].title, "⚠️ 删除失败，请人工处理")
+            result_field = next(f for f in kwargs["embed"].fields if f.name == "投票结果")
+            self.assertIn("机器人缺少删除该消息的权限。", result_field.value)
+
+    def test_invalid_target_link_marks_delete_failed(self):
+        with self.click_env() as (cog, target):
+            async def _scenario():
+                await self.seed_vote(cog, approver_ids=["100"], target_message_link="not-a-link")
+                interaction = DummyVoteInteraction(make_member(101, [VOTE_ROLE_ID]))
+                await cog.handle_vote_click(interaction, "approve")
+                return await cog.get_vote_by_record_id(1), interaction
+
+            vote, interaction = asyncio.run(_scenario())
+            self.assertEqual(vote["status"], "delete_failed")
+            target.delete.assert_not_awaited()
+            kwargs = interaction.edit_original_response.await_args.kwargs
+            self.assertIsNone(kwargs["view"])
+            self.assertEqual(kwargs["embed"].title, "⚠️ 删除失败，请人工处理")
+            result_field = next(f for f in kwargs["embed"].fields if f.name == "投票结果")
+            self.assertIn("原消息链接无效，请人工处理。", result_field.value)
 
 
 class PunishVoteHookTests(PunishVoteTestBase):
