@@ -355,6 +355,62 @@ class PunishVoteClickTests(PunishVoteTestBase):
             interaction = asyncio.run(_scenario())
             interaction.followup.send.assert_awaited_once_with("❌ 本次投票已结束。", ephemeral=True)
 
+    def test_vote_lock_is_kept_after_click_completes(self):
+        with self.click_env() as (cog, _target):
+            async def _scenario():
+                await self.seed_vote(cog)
+                interaction = DummyVoteInteraction(make_member(100, [VOTE_ROLE_ID]))
+                await cog.handle_vote_click(interaction, "approve")
+                return dict(cog._vote_locks)
+
+            locks = asyncio.run(_scenario())
+            self.assertIn(str(PANEL_MESSAGE_ID), locks)
+
+    def test_late_click_serializes_behind_queued_click(self):
+        with self.click_env() as (cog, target):
+            original_progress = cog.update_vote_progress
+            original_delete = cog._delete_punished_message
+            holding = asyncio.Event()
+            release = asyncio.Event()
+
+            async def _blocked_progress(*args, **kwargs):
+                holding.set()
+                await release.wait()
+                return await original_progress(*args, **kwargs)
+
+            async def _slow_delete(vote):
+                # Keep the queued click inside its critical section long enough for the late
+                # click to reach the DB; a pruned lock would let it read the pre-decision state.
+                await asyncio.sleep(0.05)
+                return await original_delete(vote)
+
+            async def _scenario():
+                await self.seed_vote(cog)
+                with mock.patch.object(
+                    cog, "update_vote_progress", new=mock.AsyncMock(side_effect=_blocked_progress)
+                ), mock.patch.object(
+                    cog, "_delete_punished_message", new=mock.AsyncMock(side_effect=_slow_delete)
+                ):
+                    first = asyncio.create_task(cog.handle_vote_click(
+                        DummyVoteInteraction(make_member(100, [VOTE_ROLE_ID])), "approve"))
+                    await holding.wait()
+                    queued = asyncio.create_task(cog.handle_vote_click(
+                        DummyVoteInteraction(make_member(101, [VOTE_ROLE_ID])), "approve"))
+                    await asyncio.sleep(0)
+                    release.set()
+                    await first
+
+                    late_interaction = DummyVoteInteraction(make_member(102, [VOTE_ROLE_ID]))
+                    late = asyncio.create_task(cog.handle_vote_click(late_interaction, "approve"))
+                    await asyncio.gather(queued, late)
+                return await cog.get_vote_by_record_id(1), late_interaction
+
+            vote, late_interaction = asyncio.run(_scenario())
+            self.assertEqual(vote["status"], "executed")
+            self.assertEqual(vote["approver_ids"], ["100", "101"])
+            target.delete.assert_awaited_once()
+            late_interaction.followup.send.assert_awaited_once_with("❌ 本次投票已结束。", ephemeral=True)
+
     def test_deletion_of_missing_message_still_completes_with_note(self):
         with self.click_env(target_deleted=True) as (cog, _target):
             async def _scenario():
