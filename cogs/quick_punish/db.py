@@ -68,6 +68,28 @@ class QuickPunishDBMixin:
                 WHERE removed_roles_by_guild IS NULL OR TRIM(removed_roles_by_guild) = ''
             """)
 
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS quick_punish_votes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    record_id INTEGER NOT NULL UNIQUE,
+                    vote_message_id TEXT,
+                    target_message_link TEXT,
+                    target_user_id TEXT,
+                    executor_id TEXT NOT NULL,
+                    reason TEXT,
+                    approver_ids TEXT DEFAULT '[]',
+                    rejecter_ids TEXT DEFAULT '[]',
+                    status TEXT DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    decided_at DATETIME
+                )
+            ''')
+            # Vote rows are never pruned, so the panel-message lookup needs its own index.
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_quick_punish_votes_message
+                ON quick_punish_votes (vote_message_id)
+            ''')
+
     def _parse_json_list(self, value: Any) -> list[int]:
         if isinstance(value, list):
             return [int(x) for x in value if str(x).strip().isdigit()]
@@ -80,6 +102,10 @@ class QuickPunishDBMixin:
         except Exception:
             pass
         return []
+
+    def _parse_json_str_list(self, value: Any) -> list[str]:
+        """Same JSON id-list contract as `_parse_json_list`, kept in string form."""
+        return [str(x) for x in self._parse_json_list(value)]
 
     def _parse_json_roles_by_guild(self, value: Any) -> dict[str, list[int]]:
         if value is None:
@@ -333,6 +359,96 @@ class QuickPunishDBMixin:
                 return cursor.rowcount > 0
 
         return await asyncio.to_thread(_revoke_record)
+
+    # Single source for the vote column order shared by every SELECT and `_row_to_vote`.
+    _VOTE_COLUMNS = (
+        'id, record_id, vote_message_id, target_message_link, target_user_id, '
+        'executor_id, reason, approver_ids, rejecter_ids, status, created_at, decided_at'
+    )
+
+    def _row_to_vote(self, row: tuple) -> dict[str, Any]:
+        return {
+            'id': row[0],
+            'record_id': row[1],
+            'vote_message_id': row[2],
+            'target_message_link': row[3],
+            'target_user_id': row[4],
+            'executor_id': row[5],
+            'reason': row[6],
+            'approver_ids': self._parse_json_str_list(row[7]),
+            'rejecter_ids': self._parse_json_str_list(row[8]),
+            'status': row[9],
+            'created_at': row[10],
+            'decided_at': row[11],
+        }
+
+    async def create_vote(self, *, record_id: int, vote_message_id: str, target_message_link: str,
+                          target_user_id: str, executor_id: str, reason: str) -> None:
+        """Insert one vote row; the record_id UNIQUE constraint prevents duplicate panels."""
+        def _insert_vote() -> None:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO quick_punish_votes
+                    (record_id, vote_message_id, target_message_link, target_user_id,
+                     executor_id, reason)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (record_id, vote_message_id, target_message_link, target_user_id,
+                      executor_id, reason))
+
+        await asyncio.to_thread(_insert_vote)
+
+    async def _fetch_vote(self, where_clause: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
+        """Fetch one vote row; `where_clause` is an internal literal, never user input."""
+        def _read_vote() -> dict[str, Any] | None:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT {self._VOTE_COLUMNS} FROM quick_punish_votes WHERE {where_clause}",
+                    params,
+                )
+                row = cursor.fetchone()
+                return self._row_to_vote(row) if row else None
+
+        return await asyncio.to_thread(_read_vote)
+
+    async def get_vote_by_record_id(self, record_id: int) -> dict[str, Any] | None:
+        return await self._fetch_vote("record_id = ?", (record_id,))
+
+    async def get_vote_by_message_id(self, vote_message_id: str) -> dict[str, Any] | None:
+        """Look up the vote behind a persistent panel button (keyed by panel message id)."""
+        return await self._fetch_vote("vote_message_id = ?", (vote_message_id,))
+
+    async def update_vote_progress(self, record_id: int, *,
+                                   approver_ids: list[str], rejecter_ids: list[str]) -> bool:
+        """Update the tallies of a vote that is still pending."""
+        def _update_progress() -> bool:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE quick_punish_votes
+                    SET approver_ids = ?, rejecter_ids = ?
+                    WHERE record_id = ? AND status = 'pending'
+                ''', (json.dumps(approver_ids), json.dumps(rejecter_ids), record_id))
+                return cursor.rowcount > 0
+
+        return await asyncio.to_thread(_update_progress)
+
+    async def decide_vote(self, record_id: int, *, status: str,
+                          approver_ids: list[str], rejecter_ids: list[str]) -> bool:
+        """Persist a terminal state; the pending-only guard blocks a second decision."""
+        def _decide_vote() -> bool:
+            with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE quick_punish_votes
+                    SET status = ?, approver_ids = ?, rejecter_ids = ?,
+                        decided_at = CURRENT_TIMESTAMP
+                    WHERE record_id = ? AND status = 'pending'
+                ''', (status, json.dumps(approver_ids), json.dumps(rejecter_ids), record_id))
+                return cursor.rowcount > 0
+
+        return await asyncio.to_thread(_decide_vote)
 
     def _build_restore_targets(self, record: dict[str, Any], fallback_guild_id: int | None) -> dict[str, list[int]]:
         by_guild = record.get("removed_roles_by_guild", {}) or {}

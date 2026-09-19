@@ -14,6 +14,7 @@ from .commands import (
 from .core import QuickPunishCoreMixin
 from .db import QuickPunishDBMixin
 from .notify import QuickPunishNotifyMixin
+from .vote import QuickPunishVoteMixin
 
 load_dotenv()
 
@@ -21,6 +22,7 @@ load_dotenv()
 class QuickPunishCog(
     QuickPunishCommandsMixin,
     QuickPunishNotifyMixin,
+    QuickPunishVoteMixin,
     QuickPunishDBMixin,
     QuickPunishCoreMixin,
     discord_commands.Cog,
