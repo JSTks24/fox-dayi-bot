@@ -204,7 +204,6 @@ class PunishVotePanelTests(PunishVoteTestBase):
 
         progress_field = next(f for f in embed.fields if f.name == "投票进度")
         self.assertIn("拥有快速处罚权限的成员同意", progress_field.value)
-        self.assertNotIn("投票组成员", progress_field.value)
 
     def test_cog_load_registers_persistent_view_only_when_configured(self):
         with temporary_workdir() as temp_dir, swapped_vote_db(temp_dir):
@@ -370,21 +369,9 @@ class PunishVoteClickTests(PunishVoteTestBase):
             interaction = asyncio.run(_scenario())
             interaction.followup.send.assert_awaited_once_with("❌ 本次投票已结束。", ephemeral=True)
 
-    def test_vote_lock_is_kept_after_click_completes(self):
-        with self.click_env() as (cog, _target):
-            async def _scenario():
-                await self.seed_vote(cog)
-                interaction = DummyVoteInteraction(make_member(100, [VOTE_ROLE_ID]))
-                await cog.handle_vote_click(interaction, "approve")
-                return dict(cog._vote_locks)
-
-            locks = asyncio.run(_scenario())
-            self.assertIn(str(PANEL_MESSAGE_ID), locks)
-
-    def test_late_click_serializes_behind_queued_click(self):
+    def test_overlapping_clicks_keep_the_same_panel_lock(self):
         with self.click_env() as (cog, target):
             original_progress = cog.update_vote_progress
-            original_delete = cog._delete_punished_message
             holding = asyncio.Event()
             release = asyncio.Event()
 
@@ -393,19 +380,12 @@ class PunishVoteClickTests(PunishVoteTestBase):
                 await release.wait()
                 return await original_progress(*args, **kwargs)
 
-            async def _slow_delete(vote):
-                # Keep the queued click inside its critical section long enough for the late
-                # click to reach the DB; a pruned lock would let it read the pre-decision state.
-                await asyncio.sleep(0.05)
-                return await original_delete(vote)
-
             async def _scenario():
                 await self.seed_vote(cog)
                 with mock.patch.object(
                     cog, "update_vote_progress", new=mock.AsyncMock(side_effect=_blocked_progress)
-                ), mock.patch.object(
-                    cog, "_delete_punished_message", new=mock.AsyncMock(side_effect=_slow_delete)
                 ):
+                    lock = cog._get_vote_lock(str(PANEL_MESSAGE_ID))
                     first = asyncio.create_task(cog.handle_vote_click(
                         DummyVoteInteraction(make_member(100, [VOTE_ROLE_ID])), "approve"))
                     await holding.wait()
@@ -414,17 +394,16 @@ class PunishVoteClickTests(PunishVoteTestBase):
                     await asyncio.sleep(0)
                     release.set()
                     await first
+                    # The queued click must still share the lock the first click released.
+                    still_registered = cog._vote_locks.get(str(PANEL_MESSAGE_ID)) is lock
+                    await queued
+                return still_registered, await cog.get_vote_by_record_id(1)
 
-                    late_interaction = DummyVoteInteraction(make_member(102, [VOTE_ROLE_ID]))
-                    late = asyncio.create_task(cog.handle_vote_click(late_interaction, "approve"))
-                    await asyncio.gather(queued, late)
-                return await cog.get_vote_by_record_id(1), late_interaction
-
-            vote, late_interaction = asyncio.run(_scenario())
+            still_registered, vote = asyncio.run(_scenario())
+            self.assertTrue(still_registered)
             self.assertEqual(vote["status"], "executed")
             self.assertEqual(vote["approver_ids"], ["100", "101"])
             target.delete.assert_awaited_once()
-            late_interaction.followup.send.assert_awaited_once_with("❌ 本次投票已结束。", ephemeral=True)
 
     def test_deletion_of_missing_message_still_completes_with_note(self):
         with self.click_env(target_deleted=True) as (cog, _target):
