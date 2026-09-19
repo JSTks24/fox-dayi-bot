@@ -177,6 +177,8 @@ class QuickPunishVoteMixin:
                 rejecter_ids = list(vote["rejecter_ids"])
 
                 if decision == "reject":
+                    if user_id in approver_ids:
+                        approver_ids.remove(user_id)
                     if user_id not in rejecter_ids:
                         rejecter_ids.append(user_id)
                     await self.decide_vote(

@@ -279,6 +279,21 @@ class PunishVoteClickTests(PunishVoteTestBase):
             target.delete.assert_not_awaited()
             interaction.followup.send.assert_awaited_once_with("❌ 你已经投过同意票了。", ephemeral=True)
 
+    def test_switching_approval_to_reject_keeps_only_last_action(self):
+        with self.click_env() as (cog, target):
+            async def _scenario():
+                await self.seed_vote(cog)
+                interaction = DummyVoteInteraction(make_member(100, [VOTE_ROLE_ID]))
+                await cog.handle_vote_click(interaction, "approve")
+                await cog.handle_vote_click(interaction, "reject")
+                return await cog.get_vote_by_record_id(1)
+
+            vote = asyncio.run(_scenario())
+            self.assertEqual(vote["status"], "rejected")
+            self.assertEqual(vote["approver_ids"], [])
+            self.assertEqual(vote["rejecter_ids"], ["100"])
+            target.delete.assert_not_awaited()
+
     def test_executor_approval_counts_toward_required_votes(self):
         with self.click_env() as (cog, target):
             async def _scenario():
