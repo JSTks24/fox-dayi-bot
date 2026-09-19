@@ -181,6 +181,9 @@ class QuickPunishVoteMixin:
             approver_ids = list(vote["approver_ids"])
             rejecter_ids = list(vote["rejecter_ids"])
 
+            # `update_vote_progress` and `decide_vote` return False when the row stopped being
+            # pending, but the lock serializes clicks on this panel: the pending row read above
+            # cannot be decided underneath these writes, so their guard results are safe to ignore.
             if decision == "reject":
                 if user_id in approver_ids:
                     approver_ids.remove(user_id)
