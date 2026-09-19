@@ -143,7 +143,7 @@ class QuickPunishVoteMixin:
                 name="投票进度",
                 value=(
                     f"同意：{_mentions(approver_ids)}（{len(approver_ids)}/{VOTE_REQUIRED_APPROVALS}）\n"
-                    f"需 {VOTE_REQUIRED_APPROVALS} 名投票组成员同意后删除原消息；任一成员拒绝即否决。"
+                    f"需 {VOTE_REQUIRED_APPROVALS} 名拥有快速处罚权限的成员同意后删除原消息；任一成员拒绝即否决。"
                 ),
                 inline=False,
             )

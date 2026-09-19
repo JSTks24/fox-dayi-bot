@@ -191,6 +191,20 @@ class PunishVotePanelTests(PunishVoteTestBase):
             self.assertEqual(vote["target_message_link"], TARGET_MESSAGE_LINK)
             self.assertEqual(vote["status"], "pending")
 
+    def test_pending_panel_states_permission_requirement(self):
+        cog = self.make_vote_cog(DummyVoteBot([]))
+        embed = cog.build_vote_panel_embed(
+            record_id=1,
+            target_user_id="42",
+            executor_id="2",
+            reason="刷屏",
+            target_message_link=TARGET_MESSAGE_LINK,
+        )
+
+        progress_field = next(f for f in embed.fields if f.name == "投票进度")
+        self.assertIn("拥有快速处罚权限的成员同意", progress_field.value)
+        self.assertNotIn("投票组成员", progress_field.value)
+
     def test_cog_load_registers_persistent_view_only_when_configured(self):
         with temporary_workdir() as temp_dir, swapped_vote_db(temp_dir):
             configured_bot = DummyVoteBot([])
