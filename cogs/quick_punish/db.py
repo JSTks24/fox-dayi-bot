@@ -384,7 +384,7 @@ class QuickPunishDBMixin:
 
     async def create_vote(self, *, record_id: int, vote_message_id: str, target_message_link: str,
                           target_user_id: str, executor_id: str, reason: str) -> None:
-        """写入一条投票记录（record_id 唯一约束防重复面板）"""
+        """Insert one vote row; the record_id UNIQUE constraint prevents duplicate panels."""
         def _insert_vote() -> None:
             with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
                 cursor = conn.cursor()
@@ -416,12 +416,12 @@ class QuickPunishDBMixin:
         return await self._fetch_vote("record_id = ?", (record_id,))
 
     async def get_vote_by_message_id(self, vote_message_id: str) -> dict[str, Any] | None:
-        """按投票面板消息ID定位投票（持久视图回调的查表键）"""
+        """Look up the vote behind a persistent panel button (keyed by panel message id)."""
         return await self._fetch_vote("vote_message_id = ?", (vote_message_id,))
 
     async def update_vote_progress(self, record_id: int, *,
                                    approver_ids: list[str], rejecter_ids: list[str]) -> bool:
-        """更新仍在进行中的投票的票数明细"""
+        """Update the tallies of a vote that is still pending."""
         def _update_progress() -> bool:
             with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
                 cursor = conn.cursor()
@@ -436,7 +436,7 @@ class QuickPunishDBMixin:
 
     async def decide_vote(self, record_id: int, *, status: str,
                           approver_ids: list[str], rejecter_ids: list[str]) -> bool:
-        """终态落库（仅允许从 pending 迁移，防止并发下二次判定）"""
+        """Persist a terminal state; the pending-only guard blocks a second decision."""
         def _decide_vote() -> bool:
             with sqlite3.connect(QUICK_PUNISH_DB_PATH) as conn:
                 cursor = conn.cursor()
