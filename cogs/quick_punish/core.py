@@ -26,6 +26,9 @@ class QuickPunishCoreMixin:
         self._scheduling_message_ids: set[int] = set()
         self._scheduling_user_ids: set[int] = set()
         self._schedule_creation_tasks: set[asyncio.Task[Any]] = set()
+        self._vote_tasks: set[asyncio.Task[Any]] = set()
+        self._vote_locks: dict[int, asyncio.Lock] = {}
+        self._vote_locks_guard = asyncio.Lock()
 
         # 从环境变量加载配置
         self.enabled = os.getenv("QUICK_PUNISH_ENABLED", "false").lower() == "true"
@@ -36,6 +39,8 @@ class QuickPunishCoreMixin:
         self.log_thread_ids = self._parse_channel_ids(os.getenv("QUICK_PUNISH_LOG_THREAD", ""))
         self.interface_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_INTERFACE_CHANNEL"))
         self.appeal_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_APPEAL_CHANNEL"))
+        self.vote_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_VOTE_CHANNEL"))
+        self.vote_role_ids = self._parse_role_ids(os.getenv("QUICK_PUNISH_VOTE_ROLES"))
         self.reverify_link = os.getenv("QUICK_PUNISH_REVERIFY_LINK", "").strip()
         self.rules_link = os.getenv("QUICK_PUNISH_RULES_LINK", "").strip()
 
@@ -660,6 +665,18 @@ class QuickPunishCoreMixin:
                             print("警告：未找到 QUICK_PUNISH_INTERFACE_CHANNEL，已跳过接口发送")
                     except Exception as e:
                         print(f"警告：接口频道发送失败（不影响主流程）: {e}")
+
+                if self.vote_channel_id and self.vote_role_ids:
+                    vote_task = asyncio.create_task(self.create_punish_vote(
+                        trigger_guild=trigger_guild,
+                        target_user=target_user,
+                        target_message=target_message,
+                        reason=reason,
+                        executor=executor,
+                        record_id=record_id,
+                    ))
+                    self._vote_tasks.add(vote_task)
+                    vote_task.add_done_callback(self._vote_tasks.discard)
 
                 punishment_history = await self.get_user_punishment_history(str(target_user.id))
                 success_msg = f"用户 {target_user.mention} 已被处罚（第{punish_count}次，全局）\n{self._format_sync_results(sync_results)}"
