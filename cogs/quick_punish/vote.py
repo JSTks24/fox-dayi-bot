@@ -58,10 +58,9 @@ class QuickPunishVoteMixin:
     def _get_vote_lock(self, vote_message_id: str) -> asyncio.Lock:
         """Called outside any await point, so plain get-or-create is race-free.
 
-        Locks are never pruned: `asyncio.Lock.release()` wakes a queued waiter without
-        setting `locked()` yet, so a lock that looks idle can still have a waiter, and
-        dropping it would let a later click run concurrently with that waiter on the same
-        panel. One lock per panel matches the vote table, whose rows are never pruned.
+        Never pruned: `release()` can wake a queued waiter while `locked()` is still False,
+        so an idle-looking lock may still have a waiter. One lock per panel matches the
+        never-pruned vote rows.
         """
         lock = self._vote_locks.get(vote_message_id)
         if lock is None:
