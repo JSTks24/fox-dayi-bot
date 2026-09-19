@@ -103,7 +103,6 @@ naoleiwiki-main/
 .claude/
 .codex/
 refactoring/
-AGENTS.md
 developer/
 .pytest_cache/
 deprecated/
