@@ -27,8 +27,7 @@ class QuickPunishCoreMixin:
         self._scheduling_user_ids: set[int] = set()
         self._schedule_creation_tasks: set[asyncio.Task[Any]] = set()
         self._vote_tasks: set[asyncio.Task[Any]] = set()
-        self._vote_locks: dict[int, asyncio.Lock] = {}
-        self._vote_locks_guard = asyncio.Lock()
+        self._vote_locks: dict[str, asyncio.Lock] = {}
 
         # 从环境变量加载配置
         self.enabled = os.getenv("QUICK_PUNISH_ENABLED", "false").lower() == "true"
@@ -240,6 +239,11 @@ class QuickPunishCoreMixin:
         )
         return any(marker in message for marker in duplicate_markers)
 
+    def _member_has_any_role(self, member: discord.Member, role_ids: list[int]) -> bool:
+        """Return whether the member holds at least one of the given roles."""
+        member_role_ids = {role.id for role in member.roles}
+        return any(role_id in member_role_ids for role_id in role_ids)
+
     def has_permission(self, interaction: discord.Interaction) -> bool:
         """检查用户是否有快速处罚权限（仅校验触发服allowed_roles）"""
         if not self.enabled:
@@ -253,8 +257,7 @@ class QuickPunishCoreMixin:
         if not allowed_roles:
             return False
 
-        user_roles = [role.id for role in interaction.user.roles]
-        return any(role_id in user_roles for role_id in allowed_roles)
+        return self._member_has_any_role(interaction.user, allowed_roles)
 
     async def remove_user_roles(self, member: discord.Member, roles_to_remove: list[int]) -> tuple[list[int], bool]:
         """移除用户的身份组
@@ -666,7 +669,7 @@ class QuickPunishCoreMixin:
                     except Exception as e:
                         print(f"警告：接口频道发送失败（不影响主流程）: {e}")
 
-                if self.vote_channel_id and self.vote_role_ids:
+                if self.vote_enabled:
                     vote_task = asyncio.create_task(self.create_punish_vote(
                         trigger_guild=trigger_guild,
                         target_user=target_user,

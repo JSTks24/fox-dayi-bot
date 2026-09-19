@@ -9,6 +9,7 @@ from cogs.shared.interactions import safe_defer
 from .commands import _parse_quick_punish_message_link
 
 VOTE_REQUIRED_APPROVALS = 2
+VOTE_DENIED_MESSAGE = "❌ 仅投票身份组成员可参与本次投票。"
 
 
 class PunishDeleteVoteView(discord.ui.View):
@@ -19,12 +20,10 @@ class PunishDeleteVoteView(discord.ui.View):
         self.cog = cog
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message("❌ 仅投票身份组成员可参与本次投票。", ephemeral=True)
-            return False
-        user_roles = [role.id for role in interaction.user.roles]
-        if not any(role_id in user_roles for role_id in self.cog.vote_role_ids):
-            await interaction.response.send_message("❌ 仅投票身份组成员可参与本次投票。", ephemeral=True)
+        user = interaction.user
+        if (interaction.guild is None or not isinstance(user, discord.Member)
+                or not self.cog._member_has_any_role(user, self.cog.vote_role_ids)):
+            await interaction.response.send_message(VOTE_DENIED_MESSAGE, ephemeral=True)
             return False
         return True
 
@@ -41,9 +40,14 @@ class QuickPunishVoteMixin:
     """Post-punishment delete vote: panel in QUICK_PUNISH_VOTE_CHANNEL,
     requires two approvals; any qualified reject vetoes."""
 
+    @property
+    def vote_enabled(self) -> bool:
+        """Return whether the delete vote is configured."""
+        return bool(self.vote_channel_id and self.vote_role_ids)
+
     async def cog_load(self):
         await super().cog_load()
-        if self.vote_channel_id and self.vote_role_ids:
+        if self.vote_enabled:
             self.bot.add_view(PunishDeleteVoteView(self))
 
     def cog_unload(self):
@@ -52,13 +56,13 @@ class QuickPunishVoteMixin:
                 task.cancel()
         super().cog_unload()
 
-    async def _get_vote_lock(self, record_id: int) -> asyncio.Lock:
-        async with self._vote_locks_guard:
-            lock = self._vote_locks.get(record_id)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._vote_locks[record_id] = lock
-            return lock
+    def _get_vote_lock(self, vote_message_id: str) -> asyncio.Lock:
+        """Called outside any await point, so plain get-or-create is race-free."""
+        lock = self._vote_locks.get(vote_message_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._vote_locks[vote_message_id] = lock
+        return lock
 
     async def create_punish_vote(self, *, trigger_guild: discord.Guild, target_user: discord.User,
                                  target_message: discord.Message, reason: str,
@@ -87,10 +91,7 @@ class QuickPunishVoteMixin:
             panel = await channel.send(embed=embed, view=PunishDeleteVoteView(self))
             await self.create_vote(
                 record_id=record_id,
-                guild_id=str(trigger_guild.id),
-                vote_channel_id=str(self.vote_channel_id),
                 vote_message_id=str(panel.id),
-                target_message_id=str(target_message.id),
                 target_message_link=target_message_link,
                 target_user_id=str(target_user.id),
                 executor_id=str(executor.id),
@@ -120,8 +121,8 @@ class QuickPunishVoteMixin:
         rejecter_ids = rejecter_ids or []
 
         embed = discord.Embed(
-            title=titles.get(status, titles["pending"]),
-            color=colors.get(status, colors["pending"]),
+            title=titles[status],
+            color=colors[status],
             timestamp=datetime.now(),
         )
         embed.add_field(name="处罚对象", value=f"<@{target_user_id}> ({target_user_id})", inline=False)
@@ -160,80 +161,82 @@ class QuickPunishVoteMixin:
     async def handle_vote_click(self, interaction: discord.Interaction, decision: str) -> None:
         await safe_defer(interaction)
 
-        vote = await self.get_vote_by_message_id(str(interaction.message.id))
-        if vote is None:
-            await interaction.followup.send("❌ 未找到对应的投票记录。", ephemeral=True)
-            return
+        vote_message_id = str(interaction.message.id)
+        lock = self._get_vote_lock(vote_message_id)
+        try:
+            async with lock:
+                vote = await self.get_vote_by_message_id(vote_message_id)
+                if vote is None:
+                    await interaction.followup.send("❌ 未找到对应的投票记录。", ephemeral=True)
+                    return
+                if vote["status"] != "pending":
+                    await interaction.followup.send("❌ 本次投票已结束。", ephemeral=True)
+                    return
 
-        async with await self._get_vote_lock(vote["record_id"]):
-            vote = await self.get_vote_by_message_id(str(interaction.message.id))
-            if vote is None or vote["status"] != "pending":
-                await interaction.followup.send("❌ 本次投票已结束。", ephemeral=True)
-                return
+                user_id = str(interaction.user.id)
+                approver_ids = list(vote["approver_ids"])
+                rejecter_ids = list(vote["rejecter_ids"])
 
-            user_id = str(interaction.user.id)
-            approver_ids = list(vote["approver_ids"])
-            rejecter_ids = list(vote["rejecter_ids"])
-            executor_id = str(vote["executor_id"] or "")
+                if decision == "reject":
+                    if user_id not in rejecter_ids:
+                        rejecter_ids.append(user_id)
+                    await self.decide_vote(
+                        vote["record_id"], status="rejected",
+                        approver_ids=approver_ids, rejecter_ids=rejecter_ids,
+                    )
+                    await self._finish_vote_panel(
+                        interaction, vote, status="rejected",
+                        approver_ids=approver_ids, rejecter_ids=rejecter_ids,
+                    )
+                    return
 
-            if decision == "reject":
-                if user_id not in rejecter_ids:
-                    rejecter_ids.append(user_id)
+                if user_id in approver_ids:
+                    await interaction.followup.send("❌ 你已经投过同意票了。", ephemeral=True)
+                    return
+
+                approver_ids.append(user_id)
+                if len(approver_ids) < VOTE_REQUIRED_APPROVALS:
+                    await self.update_vote_progress(
+                        vote["record_id"], approver_ids=approver_ids, rejecter_ids=rejecter_ids,
+                    )
+                    await self._finish_vote_panel(
+                        interaction, vote, status="pending",
+                        approver_ids=approver_ids, rejecter_ids=rejecter_ids,
+                    )
+                    return
+
+                status, note = await self._delete_punished_message(vote)
                 await self.decide_vote(
-                    vote["record_id"], status="rejected",
+                    vote["record_id"], status=status,
                     approver_ids=approver_ids, rejecter_ids=rejecter_ids,
                 )
-                embed = self.build_vote_panel_embed(
-                    record_id=vote["record_id"],
-                    target_user_id=vote["target_user_id"],
-                    executor_id=executor_id,
-                    reason=vote["reason"],
-                    target_message_link=vote["target_message_link"],
-                    status="rejected",
-                    approver_ids=approver_ids,
-                    rejecter_ids=rejecter_ids,
+                await self._finish_vote_panel(
+                    interaction, vote, status=status,
+                    approver_ids=approver_ids, rejecter_ids=rejecter_ids, note=note,
                 )
-                await interaction.edit_original_response(embed=embed, view=None)
-                return
+        finally:
+            # Drop the lock once idle so `_vote_locks` stays bounded, as `_punish_locks` does.
+            if self._vote_locks.get(vote_message_id) is lock and not lock.locked():
+                self._vote_locks.pop(vote_message_id, None)
 
-            if user_id in approver_ids:
-                await interaction.followup.send("❌ 你已经投过同意票了。", ephemeral=True)
-                return
-
-            approver_ids.append(user_id)
-            if len(approver_ids) < VOTE_REQUIRED_APPROVALS:
-                await self.update_vote_progress(
-                    vote["record_id"], approver_ids=approver_ids, rejecter_ids=rejecter_ids,
-                )
-                embed = self.build_vote_panel_embed(
-                    record_id=vote["record_id"],
-                    target_user_id=vote["target_user_id"],
-                    executor_id=executor_id,
-                    reason=vote["reason"],
-                    target_message_link=vote["target_message_link"],
-                    status="pending",
-                    approver_ids=approver_ids,
-                    rejecter_ids=rejecter_ids,
-                )
-                await interaction.edit_original_response(embed=embed)
-                return
-
-            status, note = await self._delete_punished_message(vote)
-            await self.decide_vote(
-                vote["record_id"], status=status,
-                approver_ids=approver_ids, rejecter_ids=rejecter_ids,
-            )
-            embed = self.build_vote_panel_embed(
-                record_id=vote["record_id"],
-                target_user_id=vote["target_user_id"],
-                executor_id=executor_id,
-                reason=vote["reason"],
-                target_message_link=vote["target_message_link"],
-                status=status,
-                approver_ids=approver_ids,
-                rejecter_ids=rejecter_ids,
-                note=note,
-            )
+    async def _finish_vote_panel(self, interaction: discord.Interaction, vote: dict[str, Any], *,
+                                 status: str, approver_ids: list[str], rejecter_ids: list[str],
+                                 note: str | None = None) -> None:
+        """Refresh the panel for `vote`; terminal states drop the buttons."""
+        embed = self.build_vote_panel_embed(
+            record_id=vote["record_id"],
+            target_user_id=vote["target_user_id"],
+            executor_id=str(vote["executor_id"] or ""),
+            reason=vote["reason"],
+            target_message_link=vote["target_message_link"],
+            status=status,
+            approver_ids=approver_ids,
+            rejecter_ids=rejecter_ids,
+            note=note,
+        )
+        if status == "pending":
+            await interaction.edit_original_response(embed=embed)
+        else:
             await interaction.edit_original_response(embed=embed, view=None)
 
     async def _delete_punished_message(self, vote: dict[str, Any]) -> tuple[str, str | None]:

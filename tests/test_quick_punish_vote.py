@@ -101,7 +101,6 @@ class PunishVoteTestBase(unittest.TestCase):
         cog.vote_channel_id = VOTE_CHANNEL_ID if configured else None
         cog.vote_role_ids = [VOTE_ROLE_ID] if configured else []
         cog._vote_locks = {}
-        cog._vote_locks_guard = asyncio.Lock()
         cog._vote_tasks = set()
         return cog
 
@@ -111,10 +110,7 @@ class PunishVoteTestBase(unittest.TestCase):
                         vote_message_id: int = PANEL_MESSAGE_ID):
         await cog.create_vote(
             record_id=record_id,
-            guild_id=str(GUILD_ID),
-            vote_channel_id=str(VOTE_CHANNEL_ID),
             vote_message_id=str(vote_message_id),
-            target_message_id=str(TARGET_MESSAGE_ID),
             target_message_link=TARGET_MESSAGE_LINK,
             target_user_id="42",
             executor_id=executor_id,
@@ -406,13 +402,12 @@ class PunishVoteHookTests(PunishVoteTestBase):
 
         return asyncio.run(_driver())
 
-    @mock.patch.object(quick_punish_core, "PUBLIC_NOTICE_PATH", Path("missing_public_notice.txt"))
-    def test_successful_punishment_posts_vote_panel(self):
+    @contextlib.contextmanager
+    def punish_env(self, *, with_vote: bool):
         with temporary_workdir() as temp_dir, swapped_vote_db(temp_dir):
             vote_channel = DummySendChannel(VOTE_CHANNEL_ID)
             target_channel = DummyFetchChannel(TARGET_CHANNEL_ID)
-            bot = DummyVoteBot([vote_channel, target_channel])
-            cog = self.make_full_cog(bot, with_vote=True)
+            cog = self.make_full_cog(DummyVoteBot([vote_channel, target_channel]), with_vote=with_vote)
             cog.init_database()
 
             with mock.patch.object(cog, "_execute_role_removal_in_guild", new=mock.AsyncMock(
@@ -420,7 +415,12 @@ class PunishVoteHookTests(PunishVoteTestBase):
             )), mock.patch.object(cog, "_build_dm_content", new=mock.AsyncMock(return_value="dm")), \
                 mock.patch.object(cog, "send_dm", new=mock.AsyncMock(return_value=True)), \
                 mock.patch.object(cog, "_send_channel_notification", new=mock.AsyncMock()):
-                success, _message, _history = self.run_execute_punishment(cog)
+                yield cog, vote_channel
+
+    @mock.patch.object(quick_punish_core, "PUBLIC_NOTICE_PATH", Path("missing_public_notice.txt"))
+    def test_successful_punishment_posts_vote_panel(self):
+        with self.punish_env(with_vote=True) as (cog, vote_channel):
+            success, _message, _history = self.run_execute_punishment(cog)
 
             self.assertTrue(success)
             vote_channel.send.assert_awaited_once()
@@ -432,19 +432,8 @@ class PunishVoteHookTests(PunishVoteTestBase):
 
     @mock.patch.object(quick_punish_core, "PUBLIC_NOTICE_PATH", Path("missing_public_notice.txt"))
     def test_punishment_without_vote_config_skips_panel(self):
-        with temporary_workdir() as temp_dir, swapped_vote_db(temp_dir):
-            vote_channel = DummySendChannel(VOTE_CHANNEL_ID)
-            target_channel = DummyFetchChannel(TARGET_CHANNEL_ID)
-            bot = DummyVoteBot([vote_channel, target_channel])
-            cog = self.make_full_cog(bot, with_vote=False)
-            cog.init_database()
-
-            with mock.patch.object(cog, "_execute_role_removal_in_guild", new=mock.AsyncMock(
-                return_value={"success": True, "guild_id": str(GUILD_ID), "guild_name": "测试服", "removed_roles": [7]}
-            )), mock.patch.object(cog, "_build_dm_content", new=mock.AsyncMock(return_value="dm")), \
-                mock.patch.object(cog, "send_dm", new=mock.AsyncMock(return_value=True)), \
-                mock.patch.object(cog, "_send_channel_notification", new=mock.AsyncMock()):
-                success, _message, _history = self.run_execute_punishment(cog)
+        with self.punish_env(with_vote=False) as (cog, vote_channel):
+            success, _message, _history = self.run_execute_punishment(cog)
 
             self.assertTrue(success)
             vote_channel.send.assert_not_awaited()
