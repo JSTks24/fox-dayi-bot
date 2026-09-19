@@ -39,7 +39,7 @@ class PunishDeleteVoteView(discord.ui.View):
 
 class QuickPunishVoteMixin:
     """Post-punishment delete vote: panel in QUICK_PUNISH_VOTE_CHANNEL,
-    requires two non-executor approvals; any qualified reject vetoes."""
+    requires two approvals; any qualified reject vetoes."""
 
     async def cog_load(self):
         await super().cog_load()
@@ -133,12 +133,11 @@ class QuickPunishVoteMixin:
             return "、".join(f"<@{uid}>" for uid in ids) or "无"
 
         if status == "pending":
-            effective = [uid for uid in approver_ids if uid != str(executor_id)]
             embed.add_field(
                 name="投票进度",
                 value=(
-                    f"同意：{_mentions(approver_ids)}（有效 {len(effective)}/{VOTE_REQUIRED_APPROVALS}）\n"
-                    f"需 {VOTE_REQUIRED_APPROVALS} 名非执行人的投票组成员同意后删除原消息；任一成员拒绝即否决。"
+                    f"同意：{_mentions(approver_ids)}（{len(approver_ids)}/{VOTE_REQUIRED_APPROVALS}）\n"
+                    f"需 {VOTE_REQUIRED_APPROVALS} 名投票组成员同意后删除原消息；任一成员拒绝即否决。"
                 ),
                 inline=False,
             )
@@ -202,8 +201,7 @@ class QuickPunishVoteMixin:
                 return
 
             approver_ids.append(user_id)
-            effective = [uid for uid in approver_ids if uid != executor_id]
-            if len(effective) < VOTE_REQUIRED_APPROVALS:
+            if len(approver_ids) < VOTE_REQUIRED_APPROVALS:
                 await self.update_vote_progress(
                     vote["record_id"], approver_ids=approver_ids, rejecter_ids=rejecter_ids,
                 )

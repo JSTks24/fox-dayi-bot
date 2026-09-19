@@ -246,7 +246,7 @@ class PunishVoteClickTests(PunishVoteTestBase):
             kwargs = interaction.edit_original_response.await_args.kwargs
             self.assertNotIn("view", kwargs)
             progress_field = next(f for f in kwargs["embed"].fields if f.name == "投票进度")
-            self.assertIn(f"有效 1/{VOTE_REQUIRED_APPROVALS}", progress_field.value)
+            self.assertIn(f"1/{VOTE_REQUIRED_APPROVALS}", progress_field.value)
 
     def test_second_approval_deletes_target_message_once(self):
         with self.click_env() as (cog, target):
@@ -281,26 +281,23 @@ class PunishVoteClickTests(PunishVoteTestBase):
             target.delete.assert_not_awaited()
             interaction.followup.send.assert_awaited_once_with("❌ 你已经投过同意票了。", ephemeral=True)
 
-    def test_executor_approval_is_not_counted_toward_required_votes(self):
+    def test_executor_approval_counts_toward_required_votes(self):
         with self.click_env() as (cog, target):
             async def _scenario():
                 await self.seed_vote(cog, executor_id="2")
                 await cog.handle_vote_click(DummyVoteInteraction(make_member(2, [VOTE_ROLE_ID])), "approve")
                 after_executor = await cog.get_vote_by_record_id(1)
+                deletes_after_executor_click = target.delete.await_count
                 await cog.handle_vote_click(DummyVoteInteraction(make_member(100, [VOTE_ROLE_ID])), "approve")
-                deletes_after_two_clicks = target.delete.await_count
                 after_one_member = await cog.get_vote_by_record_id(1)
-                await cog.handle_vote_click(DummyVoteInteraction(make_member(101, [VOTE_ROLE_ID])), "approve")
-                after_two_members = await cog.get_vote_by_record_id(1)
-                return after_executor, after_one_member, after_two_members, deletes_after_two_clicks
+                return after_executor, after_one_member, deletes_after_executor_click
 
-            after_executor, after_one_member, after_two_members, deletes_after_two_clicks = asyncio.run(_scenario())
+            after_executor, after_one_member, deletes_after_executor_click = asyncio.run(_scenario())
             self.assertEqual(after_executor["status"], "pending")
             self.assertEqual(after_executor["approver_ids"], ["2"])
-            self.assertEqual(after_one_member["status"], "pending")
+            self.assertEqual(deletes_after_executor_click, 0)
+            self.assertEqual(after_one_member["status"], "executed")
             self.assertEqual(after_one_member["approver_ids"], ["2", "100"])
-            self.assertEqual(deletes_after_two_clicks, 0)
-            self.assertEqual(after_two_members["status"], "executed")
             target.delete.assert_awaited_once()
 
     def test_executor_reject_still_vetoes(self):
