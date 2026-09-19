@@ -98,8 +98,10 @@ class PunishVoteTestBase(unittest.TestCase):
     def make_vote_cog(self, bot, *, configured: bool = True):
         cog = object.__new__(quick_punish.QuickPunishCog)
         cog.bot = bot
+        cog.enabled = True
+        cog.allowed_roles = [VOTE_ROLE_ID]
+        cog.sync_config = {"version": 1, "sync_guild_ids": [], "guilds": {}, "policy": {"mode": "best_effort"}}
         cog.vote_channel_id = VOTE_CHANNEL_ID if configured else None
-        cog.vote_role_ids = [VOTE_ROLE_ID] if configured else []
         cog._vote_locks = {}
         cog._vote_tasks = set()
         return cog
@@ -125,7 +127,7 @@ class PunishVoteTestBase(unittest.TestCase):
 
 
 class PunishVoteInteractionCheckTests(PunishVoteTestBase):
-    def test_interaction_check_gates_by_vote_role(self):
+    def test_interaction_check_gates_by_punish_permission(self):
         bot = DummyVoteBot([])
         cog = self.make_vote_cog(bot)
 

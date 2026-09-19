@@ -39,7 +39,6 @@ class QuickPunishCoreMixin:
         self.interface_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_INTERFACE_CHANNEL"))
         self.appeal_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_APPEAL_CHANNEL"))
         self.vote_channel_id = self._parse_channel_id(os.getenv("QUICK_PUNISH_VOTE_CHANNEL"))
-        self.vote_role_ids = self._parse_role_ids(os.getenv("QUICK_PUNISH_VOTE_ROLES"))
         self.reverify_link = os.getenv("QUICK_PUNISH_REVERIFY_LINK", "").strip()
         self.rules_link = os.getenv("QUICK_PUNISH_RULES_LINK", "").strip()
 

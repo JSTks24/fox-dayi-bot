@@ -9,20 +9,19 @@ from cogs.shared.interactions import safe_defer
 from .commands import _parse_quick_punish_message_link
 
 VOTE_REQUIRED_APPROVALS = 2
-VOTE_DENIED_MESSAGE = "❌ 仅投票身份组成员可参与本次投票。"
+VOTE_DENIED_MESSAGE = "❌ 你没有快速处罚权限，无法参与本次投票。"
 
 
 class PunishDeleteVoteView(discord.ui.View):
-    """Persistent vote panel: role-gated approvals delete the punished message, any reject vetoes."""
+    """Persistent vote panel: members who may use quick punish approve to delete the punished
+    message; any reject vetoes."""
 
     def __init__(self, cog):
         super().__init__(timeout=None)
         self.cog = cog
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        user = interaction.user
-        if (interaction.guild is None or not isinstance(user, discord.Member)
-                or not self.cog._member_has_any_role(user, self.cog.vote_role_ids)):
+        if not self.cog.has_permission(interaction):
             await interaction.response.send_message(VOTE_DENIED_MESSAGE, ephemeral=True)
             return False
         return True
@@ -38,12 +37,12 @@ class PunishDeleteVoteView(discord.ui.View):
 
 class QuickPunishVoteMixin:
     """Post-punishment delete vote: panel in QUICK_PUNISH_VOTE_CHANNEL,
-    requires two approvals; any qualified reject vetoes."""
+    requires two approvals from members with quick-punish permission; any reject vetoes."""
 
     @property
     def vote_enabled(self) -> bool:
         """Return whether the delete vote is configured."""
-        return bool(self.vote_channel_id and self.vote_role_ids)
+        return bool(self.vote_channel_id)
 
     async def cog_load(self):
         await super().cog_load()
